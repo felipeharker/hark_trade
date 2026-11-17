@@ -37,5 +37,6 @@ for (let h = 6; h <= 48; h += 6) {
 }
 console.log(co.log.slice(0, 5).map((l) => l.text));
 console.log(w.news.slice(0, 5).map((n) => n.text));
+co.cash += 5000;
 const r = ACTIONS.buildRoad(w, co, { a: best.a.id, b: best.b.id });
 console.log(r, ACTIONS.expedition(w, co, { from: best.b.id, name: 'Feliport' }));
