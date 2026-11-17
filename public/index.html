@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Saltroad</title>
-<meta name="description" content="Saltroad: a persistent sandbox of rival trading companies. Run caravans, build roads and works, and shape a living market with your friends.">
+<meta name="description" content="Saltroad: build an empire from open land and trade with your friends for what yours cannot give you. A persistent sandbox with no clock and no winner.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23006b4f'/%3E%3Cpath d='M7 22 L16 9 L25 22' stroke='white' stroke-width='3' fill='none' stroke-linejoin='round'/%3E%3Ccircle cx='16' cy='22' r='2.5' fill='white'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -15,9 +15,10 @@
 <div id="app" class="app">
   <canvas id="map" aria-label="World map"></canvas>
   <header id="topbar" class="topbar" hidden></header>
-  <aside id="company" class="company panel" hidden aria-label="Your company"></aside>
+  <aside id="side" class="side panel" hidden aria-label="Your empire"></aside>
   <section id="inspector" class="inspector panel" hidden aria-live="polite"></section>
   <section id="news" class="newsfeed panel" hidden aria-label="News"></section>
+  <div id="legend" class="legend panel" hidden></div>
   <div id="pickbar" class="pickbar panel" hidden></div>
   <div id="toast" class="toast" hidden></div>
   <div id="modal" class="modal" hidden></div>

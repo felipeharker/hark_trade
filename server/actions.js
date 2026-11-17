@@ -1,314 +1,326 @@
 // Player commands. Each validates, changes the world and returns a short result.
-import { GOODS, VEHICLES, BUILDINGS, ROAD, EXPEDITION_COST, START_CASH, COMPANY_COLORS, dist, roadKey } from '../shared/data.js';
 import {
-  townById, news, companyLog, fmtMoney, buyGoods, sellGoods, cargoCount, warehouseOf, warehouseCap, storeCount,
-  depart, advanceRoute, roadBetween, revealTown,
+  GOODS, TIERS, BUILDINGS, ROAD, CARAVAN, START, EMPIRE_COLORS, dist, roadKey, siteOk, upgradeCost, maxLevel,
+  claimCost, outpostCost,
+} from '../shared/data.js';
+import { tileKey, tileCenter } from '../shared/terrain.js';
+import { settleProblem, settleTiles, claimCheck } from '../shared/rules.js';
+import {
+  townById, placeById, settlementById, news, empireLog, fmtMoney, goodsText, lc, terrainOf, refreshBuildings,
+  marketBuy, marketSell, idleCaravans,
 } from './sim.js';
-import { nearestHidden } from './world.js';
 
 class GameError extends Error {}
 const fail = (m) => { throw new GameError(m); };
-export { GameError };
+export { GameError, fail };
 
-const cleanText = (s, max) => String(s ?? '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, max);
-const int = (v, lo, hi) => { const n = Math.floor(Number(v)); if (!Number.isFinite(n)) return lo; return Math.max(lo, Math.min(hi, n)); };
+export const cleanText = (s, max) => String(s ?? '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, max);
+export const int = (v, lo, hi) => { const n = Math.floor(Number(v)); if (!Number.isFinite(n)) return lo; return Math.max(lo, Math.min(hi, n)); };
 
-function knownTown(world, id) {
-  const t = townById(world, id);
-  if (!t || !t.known) fail('Unknown town.');
-  return t;
+export function pay(e, amount) {
+  if (e.cash < amount) fail(`You need ${fmtMoney(amount)} for that (you have ${fmtMoney(Math.max(0, e.cash))}).`);
+  e.cash -= amount;
 }
 
-function myCaravan(world, co, id) {
-  const c = world.caravans.find((x) => x.id === id && x.owner === co.id);
-  if (!c) fail('That caravan is not yours.');
-  return c;
+export function hasGoods(e, goods) {
+  return Object.entries(goods || {}).every(([g, q]) => Math.floor(e.stock[g] || 0) >= q);
+}
+// Take materials out of an empire's stores, or explain what is short.
+export function takeGoods(e, goods, what = 'that') {
+  const short = Object.entries(goods || {}).filter(([g, q]) => Math.floor(e.stock[g] || 0) < q);
+  if (short.length) fail(`You need ${goodsText(goods)} for ${what}. You are short of ${short.map(([g, q]) => `${Math.ceil(q - Math.floor(e.stock[g] || 0))} ${lc(g)}`).join(' and ')}.`);
+  for (const [g, q] of Object.entries(goods || {})) e.stock[g] -= q;
 }
 
-function pay(co, amount) {
-  if (co.cash < amount) fail(`You need ${fmtMoney(amount)} for that (you have ${fmtMoney(co.cash)}).`);
-  co.cash -= amount;
+function landCtx(world) {
+  return {
+    terrain: terrainOf(world), towns: world.towns, settlements: world.settlements,
+    tileAt: (tx, ty) => world.tiles[tileKey(tx, ty)],
+  };
 }
 
-function newCaravan(world, co, type, townId) {
-  const n = world.caravans.filter((c) => c.owner === co.id).length + 1;
-  const c = { id: 'c' + world.nextId++, owner: co.id, type, name: `${VEHICLES[type].name} ${n}`, cargo: {}, at: townId, from: null, to: null, departAt: 0, arriveAt: 0, route: null, viaRoad: false };
-  world.caravans.push(c);
-  return c;
+function settle(world, e, tx, ty, capital, name) {
+  const ctx = landCtx(world);
+  const problem = settleProblem(ctx, tx, ty, capital, e.id);
+  if (problem) fail(problem);
+  const c = tileCenter(tx, ty);
+  const s = { id: 's' + world.nextId++, owner: e.id, name, tx, ty, x: c.x, y: c.y, capital, foundedAt: Date.now() };
+  for (const [x, y] of settleTiles(ctx, tx, ty, capital)) world.tiles[tileKey(x, y)] = { o: e.id, s: s.id };
+  world.settlements.push(s);
+  world.buildings.push({ id: 'b' + world.nextId++, type: 'hall', owner: e.id, s: s.id, tx, ty, level: 1, builtAt: Date.now() });
+  e.land = Object.values(world.tiles).filter((t) => t.o === e.id).length;
+  return s;
 }
 
-export function createCompany(world, userId, { name, color, home }) {
-  if (world.companies[userId]) fail('You already run a company.');
-  name = cleanText(name, 32);
-  if (name.length < 2) fail('Pick a company name.');
-  if (Object.values(world.companies).some((c) => c.name.toLowerCase() === name.toLowerCase())) fail('That name is taken.');
-  const t = knownTown(world, home);
-  if (!COMPANY_COLORS.includes(color)) color = COMPANY_COLORS[Object.keys(world.companies).length % COMPANY_COLORS.length];
-  const co = { id: userId, name, color, cash: START_CASH, home: t.id, createdAt: Date.now(), log: [], stats: {}, worthHist: [], milestones: [] };
-  world.companies[userId] = co;
-  newCaravan(world, co, 'wagon', t.id);
-  news(world, `${name} opens its doors in ${t.name}.`, 'company');
-  companyLog(co, `Founded in ${t.name} with ${fmtMoney(START_CASH)} and one wagon.`);
+function uniqueName(world, name, what) {
+  const taken = (n) => world.towns.some((t) => t.name.toLowerCase() === n) || world.settlements.some((s) => s.name.toLowerCase() === n);
+  if (taken(name.toLowerCase())) fail(`There is already a ${what} called ${name}.`);
+}
+
+export function createEmpire(world, userId, a) {
+  if (world.empires[userId]) fail('You already have an empire.');
+  const name = cleanText(a.name, 28);
+  if (name.length < 2) fail('Give your empire a name.');
+  if (Object.values(world.empires).some((c) => c.name.toLowerCase() === name.toLowerCase())) fail('That name is taken.');
+  const seat = cleanText(a.seat, 24) || name;
+  uniqueName(world, seat, 'place');
+  let color = a.color;
+  const used = new Set(Object.values(world.empires).map((c) => c.color));
+  if (!EMPIRE_COLORS.includes(color) || used.has(color)) color = EMPIRE_COLORS.find((c) => !used.has(c)) || EMPIRE_COLORS[Object.keys(world.empires).length % EMPIRE_COLORS.length];
+  const e = {
+    id: userId, name, color, cash: START.cash, tier: 0, pop: 0, sat: 0.8, stock: { ...START.stock }, caravans: START.caravans,
+    extra: 0, land: 0, orders: [], fill: {}, createdAt: Date.now(), log: [], stats: {}, worthHist: [], popHist: [], milestones: [],
+  };
+  const s = settle(world, e, int(a.tx, -1, 1e6), int(a.ty, -1, 1e6), true, seat);
+  world.empires[userId] = e;
+  refreshBuildings(world, e.id);
+  news(world, `${name} is founded at ${s.name}.`, 'empire');
+  empireLog(e, `Founded ${s.name} with ${fmtMoney(START.cash)}, ${START.caravans} caravans and stores of ${goodsText(START.stock)}.`);
   return { ok: true };
 }
 
+function myBuilding(world, e, id) {
+  const b = world.buildings.find((x) => x.id === id && x.owner === e.id);
+  if (!b) fail('That is not yours.');
+  return b;
+}
+
+const anyTown = (world, id) => townById(world, id) || fail('Unknown town.');
+const goodId = (g) => (Object.hasOwn(GOODS, g) ? g : fail('Unknown good.'));
+
 export const ACTIONS = {
-  trade(world, co, a) {
-    const c = myCaravan(world, co, a.caravan);
-    if (!c.at) fail('The caravan is on the road.');
-    if (!GOODS[a.good]) fail('Unknown good.');
-    const t = townById(world, c.at);
-    const qty = int(a.qty, 1, 10000);
-    if (a.op === 'buy') {
-      const space = VEHICLES[c.type].capacity - cargoCount(c);
-      if (space <= 0) fail('The caravan is full.');
-      const r = buyGoods(world, co, c.cargo, t, a.good, qty, 0, space);
-      if (!r.bought) fail(t.stock[a.good] < 1 ? 'The market is out of that.' : 'Not enough cash.');
-      companyLog(co, `${c.name} bought ${r.bought} ${a.good} in ${t.name} for ${fmtMoney(r.spent)}.`);
-      return { msg: `Bought ${r.bought} for ${fmtMoney(r.spent)}` };
+  // ----- land and buildings -----
+  claim(world, e, a) {
+    const tx = int(a.tx, -1, 1e6), ty = int(a.ty, -1, 1e6);
+    const r = claimCheck(landCtx(world), tx, ty, e.id);
+    if (r.problem) fail(r.problem);
+    const cost = claimCost(e.extra || 0);
+    pay(e, cost);
+    world.tiles[tileKey(tx, ty)] = { o: e.id, s: r.s };
+    e.extra = (e.extra || 0) + 1; e.land = (e.land || 0) + 1;
+    return { msg: `Plot claimed for ${fmtMoney(cost)}` };
+  },
+
+  build(world, e, a) {
+    const def = Object.hasOwn(BUILDINGS, a.kind) ? BUILDINGS[a.kind] : null;
+    if (!def || def.fixed) fail('Unknown building.');
+    const tx = int(a.tx, -1, 1e6), ty = int(a.ty, -1, 1e6);
+    const tile = world.tiles[tileKey(tx, ty)];
+    if (!tile || tile.o !== e.id) fail('Build on land you hold. Claim the plot first.');
+    if (world.buildings.some((b) => b.tx === tx && b.ty === ty)) fail('There is already something on that plot.');
+    const terrain = terrainOf(world);
+    if (!siteOk(def, terrain.tile(tx, ty).kind, terrain.coastal(tx, ty))) fail(`${def.name} cannot go on that land. ${def.blurb}`);
+    if ((def.tier || 0) > e.tier) fail(`Only a ${TIERS[def.tier].name.toLowerCase()} or larger can build that.`);
+    if (e.cash < def.cost) fail(`You need ${fmtMoney(def.cost)} for that (you have ${fmtMoney(Math.max(0, e.cash))}).`);
+    takeGoods(e, def.mats, `the ${def.name.toLowerCase()}`);
+    pay(e, def.cost);
+    const b = { id: 'b' + world.nextId++, type: a.kind, owner: e.id, s: tile.s, tx, ty, level: 1, builtAt: Date.now() };
+    world.buildings.push(b);
+    refreshBuildings(world, e.id);
+    return { msg: `${def.name} built`, building: b.id };
+  },
+
+  upgrade(world, e, a) {
+    const b = myBuilding(world, e, a.building);
+    const def = BUILDINGS[b.type];
+    const top = maxLevel(b.type, e.tier);
+    if (b.level >= top) {
+      const next = TIERS.findIndex((t, i) => i > e.tier && maxLevel(b.type, i) > b.level);
+      fail(next > 0 ? `Become a ${TIERS[next].name.toLowerCase()} to take this further.` : 'It is as large as it gets.');
     }
-    if (a.op === 'sell') {
-      const r = sellGoods(world, co, c.cargo, t, a.good, qty, 0);
-      if (!r.sold) fail('Nothing to sell.');
-      companyLog(co, `${c.name} sold ${r.sold} ${a.good} in ${t.name} for ${fmtMoney(r.earned)}.`);
-      return { msg: `Sold ${r.sold} for ${fmtMoney(r.earned)}` };
-    }
-    fail('Bad order.');
+    const c = upgradeCost(b.type, b.level);
+    if (e.cash < c.cash) fail(`You need ${fmtMoney(c.cash)} for that (you have ${fmtMoney(Math.max(0, e.cash))}).`);
+    takeGoods(e, c.mats, 'that upgrade');
+    pay(e, c.cash);
+    b.level++;
+    return { msg: `${def.name} is now level ${b.level}` };
   },
 
-  // Move goods between a caravan and your warehouse in the same town.
-  transfer(world, co, a) {
-    const c = myCaravan(world, co, a.caravan);
-    if (!c.at) fail('The caravan is on the road.');
-    const w = warehouseOf(world, co.id, c.at);
-    if (!w) fail('You have no warehouse here.');
-    if (!GOODS[a.good]) fail('Unknown good.');
-    const qty = int(a.qty, 1, 10000);
-    if (a.op === 'load') {
-      const n = Math.min(Math.floor(w.stock[a.good] || 0), VEHICLES[c.type].capacity - cargoCount(c), qty);
-      if (n <= 0) fail('Nothing to load, or no room.');
-      w.stock[a.good] -= n; c.cargo[a.good] = (c.cargo[a.good] || 0) + n;
-      return { msg: `Loaded ${n}` };
-    }
-    const n = Math.min(Math.floor(c.cargo[a.good] || 0), warehouseCap(w) - storeCount(w), qty);
-    if (n <= 0) fail('Nothing to unload, or the warehouse is full.');
-    c.cargo[a.good] -= n; if (c.cargo[a.good] <= 0) delete c.cargo[a.good];
-    w.stock[a.good] = (w.stock[a.good] || 0) + n;
-    return { msg: `Unloaded ${n}` };
+  demolish(world, e, a) {
+    const b = myBuilding(world, e, a.building);
+    if (b.type === 'hall') fail('A town hall cannot be pulled down.');
+    world.buildings = world.buildings.filter((x) => x !== b);
+    e.cash += BUILDINGS[b.type].cost * 0.3;
+    refreshBuildings(world, e.id);
+    return { msg: 'Pulled down' };
   },
 
-  // Trade straight from a warehouse with the local market.
-  storeTrade(world, co, a) {
-    const t = knownTown(world, a.town);
-    const w = warehouseOf(world, co.id, t.id);
-    if (!w) fail('You have no warehouse here.');
-    if (!GOODS[a.good]) fail('Unknown good.');
-    const qty = int(a.qty, 1, 10000);
-    if (a.op === 'sell') {
-      const r = sellGoods(world, co, w.stock, t, a.good, qty, 0);
-      if (!r.sold) fail('Nothing to sell.');
-      companyLog(co, `Warehouse in ${t.name} sold ${r.sold} ${a.good} for ${fmtMoney(r.earned)}.`);
-      return { msg: `Sold ${r.sold} for ${fmtMoney(r.earned)}` };
-    }
-    const r = buyGoods(world, co, w.stock, t, a.good, qty, 0, warehouseCap(w) - storeCount(w));
-    if (!r.bought) fail('Could not buy (no stock, room or cash).');
-    companyLog(co, `Warehouse in ${t.name} bought ${r.bought} ${a.good} for ${fmtMoney(r.spent)}.`);
-    return { msg: `Bought ${r.bought} for ${fmtMoney(r.spent)}` };
+  pause(world, e, a) {
+    const b = myBuilding(world, e, a.building);
+    if (!BUILDINGS[b.type].rate) fail('Only working buildings can be paused.');
+    b.paused = !!a.on;
+    if (b.paused) b.idle = null;
+    return { msg: b.paused ? 'Paused. Its workers are free and upkeep drops to a quarter.' : 'Back at work' };
   },
 
-  send(world, co, a) {
-    const c = myCaravan(world, co, a.caravan);
-    if (!c.at) fail('The caravan is already on the road.');
-    const t = knownTown(world, a.to);
-    if (t.id === c.at) fail('Already there.');
-    c.route = null;
-    depart(world, c, t.id, Date.now());
-    return { msg: `${c.name} set off for ${t.name}` };
+  charter(world, e) {
+    const next = TIERS[e.tier + 1];
+    if (!next) fail('There is no higher rank.');
+    if (e.pop < next.min) fail(`You need ${next.min.toLocaleString('en-US')} people to become a ${next.name.toLowerCase()} (you have ${Math.floor(e.pop).toLocaleString('en-US')}).`);
+    if (e.cash < next.charter.cash) fail(`The charter costs ${fmtMoney(next.charter.cash)} (you have ${fmtMoney(Math.max(0, e.cash))}).`);
+    takeGoods(e, next.charter.goods, 'the charter');
+    pay(e, next.charter.cash);
+    e.tier++;
+    const wants = Object.keys(next.needs).map(lc);
+    news(world, `${e.name} is now a ${next.name.toLowerCase()}.${wants.length ? ` Its people want ${wants.join(', ')}.` : ''}`, 'empire');
+    empireLog(e, `Chartered as a ${next.name.toLowerCase()}.`);
+    return { msg: `You are now a ${next.name.toLowerCase()}` };
   },
 
-  setRoute(world, co, a) {
-    const c = myCaravan(world, co, a.caravan);
-    const stops = (Array.isArray(a.stops) ? a.stops : []).slice(0, 8).map((s) => ({
-      town: knownTown(world, s.town).id,
-      orders: (Array.isArray(s.orders) ? s.orders : []).slice(0, 8).filter((o) => GOODS[o.good] && ['buy', 'sell', 'load', 'unload'].includes(o.op))
-        .map((o) => ({ op: o.op, good: o.good, qty: int(o.qty, 0, 10000), limit: Math.max(0, Number(o.limit) || 0) })),
-    }));
-    if (stops.length < 2) fail('A route needs at least two stops.');
-    for (let i = 0; i < stops.length; i++) if (stops[i].town === stops[(i + 1) % stops.length].town) fail('Two stops in a row are the same town.');
-    // Start at the stop the caravan is heading for or sitting at, if any.
-    const here = c.at || c.to;
-    let idx = stops.findIndex((s) => s.town === here);
-    if (idx < 0) idx = 0;
-    c.route = { stops, idx };
-    if (c.at) advanceRoute(world, c, Date.now());
-    return { msg: `${c.name} is running its route` };
+  outpost(world, e, a) {
+    if (e.tier < 1) fail('Become a village before founding outposts.');
+    const n = world.settlements.filter((s) => s.owner === e.id && !s.capital).length;
+    const cost = outpostCost(n);
+    const name = cleanText(a.name, 24);
+    if (name.length < 2) fail('Give the outpost a name.');
+    uniqueName(world, name, 'place');
+    if (e.cash < cost) fail(`An outpost costs ${fmtMoney(cost)} (you have ${fmtMoney(Math.max(0, e.cash))}).`);
+    const s = settle(world, e, int(a.tx, -1, 1e6), int(a.ty, -1, 1e6), false, name);
+    pay(e, cost);
+    refreshBuildings(world, e.id);
+    news(world, `${e.name} founds the outpost of ${s.name}.`, 'build');
+    return { msg: `${s.name} founded`, settlement: s.id };
   },
 
-  clearRoute(world, co, a) {
-    const c = myCaravan(world, co, a.caravan);
-    c.route = null;
-    return { msg: `${c.name} will stop at its next town` };
-  },
-
-  renameCaravan(world, co, a) {
-    const c = myCaravan(world, co, a.caravan);
-    const n = cleanText(a.name, 24);
-    if (n.length < 1) fail('Give it a name.');
-    c.name = n;
+  renameSettlement(world, e, a) {
+    const s = settlementById(world, a.settlement);
+    if (!s || s.owner !== e.id) fail('That is not yours.');
+    const name = cleanText(a.name, 24);
+    if (name.length < 2) fail('Give it a name.');
+    if (name.toLowerCase() !== s.name.toLowerCase()) uniqueName(world, name, 'place');
+    s.name = name;
     return { msg: 'Renamed' };
   },
 
-  buyVehicle(world, co, a) {
-    const v = VEHICLES[a.kind];
-    if (!v) fail('Unknown vehicle.');
-    const t = knownTown(world, a.town);
-    if (t.id !== co.home && !warehouseOf(world, co.id, t.id)) fail('Buy vehicles at your home town or a town where you have a warehouse.');
-    pay(co, v.cost);
-    const c = newCaravan(world, co, a.kind, t.id);
-    companyLog(co, `Bought ${c.name} in ${t.name} for ${fmtMoney(v.cost)}.`);
-    return { msg: `${c.name} is ready in ${t.name}` };
+  // ----- caravans and the town markets -----
+  buyCaravan(world, e) {
+    if (e.caravans >= CARAVAN.max) fail(`${CARAVAN.max} caravans is the most anyone can run.`);
+    pay(e, CARAVAN.cost);
+    e.caravans++;
+    return { msg: `You now run ${e.caravans} caravans` };
   },
 
-  sellVehicle(world, co, a) {
-    const c = myCaravan(world, co, a.caravan);
-    if (!c.at) fail('Wait until it reaches a town.');
-    if (cargoCount(c) > 0) fail('Empty it first.');
-    const refund = VEHICLES[c.type].cost * 0.5;
-    co.cash += refund;
-    world.caravans = world.caravans.filter((x) => x !== c);
-    return { msg: `Sold for ${fmtMoney(refund)}` };
+  sellCaravan(world, e) {
+    if (idleCaravans(world, e) < 1) fail('Wait for a caravan to come home.');
+    e.caravans--;
+    e.cash += CARAVAN.cost * 0.5;
+    return { msg: `Sold for ${fmtMoney(CARAVAN.cost * 0.5)}` };
   },
 
-  build(world, co, a) {
-    const def = BUILDINGS[a.kind];
-    if (!def) fail('Unknown building.');
-    const t = knownTown(world, a.town);
-    const w = warehouseOf(world, co.id, t.id);
-    if (a.kind === 'warehouse') {
-      if (w) fail('You already have a warehouse here. Expand it instead.');
-    } else if (!w) fail('Build a warehouse here first.');
-    let good;
-    if (a.kind === 'estate') {
-      good = a.good;
-      if (!t.resources.some((r) => r.good === good)) fail(`${t.name} cannot produce that.`);
+  marketBuy(world, e, a) {
+    const t = anyTown(world, a.town);
+    const r = marketBuy(world, e, t, goodId(a.good), int(a.qty, 1, 100000), 0, Date.now());
+    if (!r.n) fail(r.why);
+    return { msg: `Bought ${r.n} for ${fmtMoney(r.total)}. Home in ${hoursText((r.trip.returnAt - r.trip.departAt) / 3600e3)}.` };
+  },
+
+  marketSell(world, e, a) {
+    const t = anyTown(world, a.town);
+    const r = marketSell(world, e, t, goodId(a.good), int(a.qty, 1, 100000), 0, Date.now());
+    if (!r.n) fail(r.why);
+    return { msg: `Sold ${r.n} for ${fmtMoney(r.total)}` };
+  },
+
+  setOrder(world, e, a) {
+    const t = anyTown(world, a.town);
+    const good = goodId(a.good);
+    if (a.op !== 'buy' && a.op !== 'sell') fail('Bad order.');
+    e.orders ||= [];
+    const o = { id: 'o' + world.nextId++, op: a.op, good, town: t.id, level: int(a.level, 0, 100000), limit: Math.max(0, Math.round((Number(a.limit) || 0) * 100) / 100) };
+    const same = e.orders.findIndex((x) => x.op === o.op && x.good === o.good && x.town === o.town);
+    if (same >= 0) e.orders[same] = o;
+    else {
+      if (e.orders.length >= 10) fail('Ten standing orders is the limit.');
+      e.orders.push(o);
     }
-    const mine = world.buildings.filter((b) => b.owner === co.id && b.town === t.id && b.type !== 'warehouse');
-    if (a.kind !== 'warehouse' && mine.length >= 3) fail('At most three works per town.');
-    pay(co, def.cost);
-    const b = { id: 'b' + world.nextId++, type: a.kind, owner: co.id, town: t.id, builtAt: Date.now() };
-    if (a.kind === 'warehouse') { b.stock = {}; b.level = 1; }
-    if (good) b.good = good;
-    world.buildings.push(b);
-    const what = a.kind === 'estate' ? `a ${GOODS[good].name.toLowerCase()} estate` : `a ${def.name.toLowerCase()}`;
-    news(world, `${co.name} builds ${what} in ${t.name}.`, 'build');
-    return { msg: `Built ${what}` };
+    return { msg: 'Standing order set' };
   },
 
-  expandWarehouse(world, co, a) {
-    const w = warehouseOf(world, co.id, a.town);
-    if (!w) fail('No warehouse there.');
-    if ((w.level || 1) >= 5) fail('It is as big as it gets.');
-    pay(co, 600 * (w.level || 1));
-    w.level = (w.level || 1) + 1;
-    return { msg: `Warehouse now holds ${warehouseCap(w)}` };
+  removeOrder(world, e, a) {
+    e.orders = (e.orders || []).filter((o) => o.id !== a.order);
+    return { msg: 'Standing order removed' };
   },
 
-  demolish(world, co, a) {
-    const b = world.buildings.find((x) => x.id === a.building && x.owner === co.id);
-    if (!b) fail('Not yours.');
-    if (b.type === 'warehouse' && world.buildings.some((x) => x.owner === co.id && x.town === b.town && x.type !== 'warehouse')) fail('Pull down the works here first.');
-    if (b.type === 'warehouse' && storeCount(b) > 0) fail('Empty the warehouse first.');
-    world.buildings = world.buildings.filter((x) => x !== b);
-    co.cash += BUILDINGS[b.type].cost * 0.3;
-    return { msg: 'Demolished' };
-  },
-
-  buildRoad(world, co, a) {
-    const A = knownTown(world, a.a), B = knownTown(world, a.b);
-    if (A.id === B.id) fail('Pick two different towns.');
-    if (roadBetween(world, A.id, B.id)) fail('There is already a road there.');
+  // ----- roads -----
+  buildRoad(world, e, a) {
+    const A = placeById(world, a.a), B = placeById(world, a.b);
+    if (!A || !B) fail('Pick two places.');
+    if (A.id === B.id) fail('Pick two different places.');
+    const key = roadKey(A.id, B.id);
+    if (world.roads.some((r) => r.key === key)) fail('There is already a road there.');
     const len = dist(A, B);
-    if (len > ROAD.maxLength) fail(`Too far for one road (${Math.round(len)} of ${ROAD.maxLength} leagues). Build through a town in between.`);
+    if (len > ROAD.maxLength) fail(`Too far for one road (${Math.round(len)} of ${ROAD.maxLength} leagues). Build through a place in between.`);
     const cost = Math.round(ROAD.base + ROAD.costPerUnit * len);
-    pay(co, cost);
-    const toll = int(a.toll ?? ROAD.defaultToll, 0, 200);
-    world.roads.push({ id: 'r' + world.nextId++, key: roadKey(A.id, B.id), a: A.id, b: B.id, owner: co.id, toll, length: Math.round(len), cost, builtAt: Date.now() });
-    news(world, `${co.name} opens a road between ${A.name} and ${B.name}. Toll ${fmtMoney(toll)}.`, 'build');
+    pay(e, cost);
+    const toll = int(a.toll ?? ROAD.defaultToll, 0, ROAD.maxToll);
+    world.roads.push({ id: 'r' + world.nextId++, key, a: A.id, b: B.id, owner: e.id, toll, length: Math.round(len), cost, builtAt: Date.now() });
+    news(world, `${e.name} opens a road between ${A.name} and ${B.name}. Toll ${fmtMoney(toll)}.`, 'build');
     return { msg: `Road built for ${fmtMoney(cost)}` };
   },
 
-  setToll(world, co, a) {
-    const r = world.roads.find((x) => x.id === a.road && x.owner === co.id);
+  setToll(world, e, a) {
+    const r = world.roads.find((x) => x.id === a.road && x.owner === e.id);
     if (!r) fail('Not your road.');
     const old = r.toll;
-    r.toll = int(a.toll, 0, 200);
-    if (r.toll !== old) news(world, `${co.name} sets the ${townById(world, r.a).name}–${townById(world, r.b).name} toll to ${fmtMoney(r.toll)}.`, 'build');
+    r.toll = int(a.toll, 0, ROAD.maxToll);
+    if (r.toll !== old) news(world, `${e.name} sets the ${placeById(world, r.a)?.name}–${placeById(world, r.b)?.name} toll to ${fmtMoney(r.toll)}.`, 'build');
     return { msg: 'Toll set' };
   },
 
-  sellRoad(world, co, a) {
-    const r = world.roads.find((x) => x.id === a.road && x.owner === co.id);
+  sellRoad(world, e, a) {
+    const r = world.roads.find((x) => x.id === a.road && x.owner === e.id);
     if (!r) fail('Not your road.');
-    const to = world.companies[a.to];
-    if (!to || to.id === co.id) fail('Pick another company.');
-    const price = int(a.price, 0, 10_000_000);
-    if (to.cash < price) fail(`${to.name} cannot afford that.`);
-    // A sale needs the buyer's consent: create an offer they can accept.
-    world.offers ||= [];
-    world.offers.push({ id: 'o' + world.nextId++, kind: 'road', road: r.id, from: co.id, to: to.id, price, t: Date.now() });
+    const to = world.empires[a.to];
+    if (!to || to.id === e.id) fail('Pick another empire.');
+    const price = int(a.price, 0, 100_000_000);
+    world.offers = world.offers.filter((o) => !(o.road === r.id && o.to === to.id));
+    world.offers.push({ id: 'f' + world.nextId++, kind: 'road', road: r.id, from: e.id, to: to.id, price, t: Date.now() });
+    empireLog(to, `${e.name} offers you the ${placeById(world, r.a)?.name}–${placeById(world, r.b)?.name} road for ${fmtMoney(price)}.`);
     return { msg: `Offer sent to ${to.name}` };
   },
 
-  acceptOffer(world, co, a) {
-    world.offers ||= [];
-    const o = world.offers.find((x) => x.id === a.offer && x.to === co.id);
+  acceptOffer(world, e, a) {
+    const o = world.offers.find((x) => x.id === a.offer && x.to === e.id);
     if (!o) fail('No such offer.');
     const r = world.roads.find((x) => x.id === o.road && x.owner === o.from);
-    world.offers = world.offers.filter((x) => x !== o);
-    if (!r) fail('That road has changed hands.');
-    pay(co, o.price);
-    const seller = world.companies[o.from];
+    if (!r) { world.offers = world.offers.filter((x) => x !== o); fail('That road has changed hands.'); }
+    pay(e, o.price);
+    world.offers = world.offers.filter((x) => x.road !== o.road);
+    const seller = world.empires[o.from];
     if (seller) seller.cash += o.price;
-    r.owner = co.id;
-    news(world, `${co.name} buys the ${townById(world, r.a).name}–${townById(world, r.b).name} road from ${seller?.name} for ${fmtMoney(o.price)}.`, 'deal');
+    r.owner = e.id;
+    news(world, `${e.name} buys the ${placeById(world, r.a)?.name}–${placeById(world, r.b)?.name} road from ${seller?.name} for ${fmtMoney(o.price)}.`, 'deal');
     return { msg: 'Road bought' };
   },
 
-  declineOffer(world, co, a) {
-    world.offers = (world.offers || []).filter((x) => !(x.id === a.offer && (x.to === co.id || x.from === co.id)));
+  declineOffer(world, e, a) {
+    world.offers = world.offers.filter((x) => !(x.id === a.offer && (x.to === e.id || x.from === e.id)));
     return { msg: 'Offer withdrawn' };
   },
 
-  expedition(world, co, a) {
-    const from = knownTown(world, a.from);
-    const h = nearestHidden(world, from);
-    if (!h) fail('The whole world is mapped.');
-    pay(co, EXPEDITION_COST);
-    const name = cleanText(a.name, 24);
-    if (name && name.length >= 2 && !world.towns.some((t) => t.name.toLowerCase() === name.toLowerCase())) h.name = name;
-    h.foundedBy = co.id;
-    revealTown(world, h);
-    news(world, `An expedition from ${co.name} reaches ${h.name}, beyond ${from.name}. It trades in ${h.resources.map((r) => r.good).join(', ')}.`, 'frontier');
-    return { msg: `Discovered ${h.name}`, town: h.id };
-  },
-
-  pay(world, co, a) {
-    const to = world.companies[a.to];
-    if (!to || to.id === co.id) fail('Pick another company.');
-    const amount = int(a.amount, 1, 10_000_000);
-    pay(co, amount);
+  // ----- each other -----
+  pay(world, e, a) {
+    const to = world.empires[a.to];
+    if (!to || to.id === e.id) fail('Pick another empire.');
+    const amount = int(a.amount, 1, 100_000_000);
+    pay(e, amount);
     to.cash += amount;
     const note = cleanText(a.note, 80);
-    news(world, `${co.name} paid ${to.name} ${fmtMoney(amount)}${note ? `: “${note}”` : ''}.`, 'deal');
-    companyLog(to, `Received ${fmtMoney(amount)} from ${co.name}${note ? `: “${note}”` : ''}.`);
+    news(world, `${e.name} paid ${to.name} ${fmtMoney(amount)}${note ? `: “${note}”` : ''}.`, 'deal');
+    empireLog(to, `Received ${fmtMoney(amount)} from ${e.name}${note ? `: “${note}”` : ''}.`);
     return { msg: 'Paid' };
   },
 
-  post(world, co, a) {
+  post(world, e, a) {
     const text = cleanText(a.text, 280);
     if (!text) fail('Say something.');
-    world.board.unshift({ t: Date.now(), company: co.id, text });
+    world.board.unshift({ t: Date.now(), empire: e.id, text });
     if (world.board.length > 200) world.board.length = 200;
     return { msg: 'Posted' };
   },
 };
+
+function hoursText(h) {
+  const m = Math.round(h * 60);
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+}

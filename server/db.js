@@ -33,6 +33,7 @@ async function pgStore(url) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    ALTER TABLE world_backups ADD COLUMN IF NOT EXISTS kept BOOLEAN NOT NULL DEFAULT FALSE;
   `);
   return {
     kind: 'postgres',
@@ -46,9 +47,10 @@ async function pgStore(url) {
         [JSON.stringify(state)],
       );
     },
-    async backupWorld(state) {
-      await pool.query('INSERT INTO world_backups (state) VALUES ($1)', [JSON.stringify(state)]);
-      await pool.query('DELETE FROM world_backups WHERE id NOT IN (SELECT id FROM world_backups ORDER BY id DESC LIMIT 14)');
+    // Rolling backups keep the last 14. A world that is being replaced is kept for good.
+    async backupWorld(state, keep = false) {
+      await pool.query('INSERT INTO world_backups (state, kept) VALUES ($1, $2)', [JSON.stringify(state), keep]);
+      await pool.query('DELETE FROM world_backups WHERE NOT kept AND id NOT IN (SELECT id FROM world_backups WHERE NOT kept ORDER BY id DESC LIMIT 14)');
     },
     async findUser(username) {
       const r = await pool.query('SELECT * FROM users WHERE lower(username) = lower($1)', [username]);
@@ -89,7 +91,7 @@ function fileStore() {
     kind: 'file',
     async loadWorld() { return read('world.json', null); },
     async saveWorld(s) { write('world.json', s); },
-    async backupWorld(s) { write('world.backup.json', s); },
+    async backupWorld(s, keep = false) { write(keep ? `world.kept-${Date.now()}.json` : 'world.backup.json', s); },
     async findUser(u) { return read('users.json', []).find((x) => x.username.toLowerCase() === u.toLowerCase()) || null; },
     async userById(id) { const u = read('users.json', []).find((x) => x.id === id); return u ? { id: u.id, username: u.username, is_admin: u.is_admin } : null; },
     async createUser(username, pass_hash) {

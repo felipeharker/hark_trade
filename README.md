@@ -1,19 +1,24 @@
 # Saltroad
 
-A persistent, real-time sandbox of rival trading companies, built for a small group of friends or coworkers. There is no clock, no rounds and no winner. The world runs all the time: one hour on the clock is one hour in the world, caravans keep moving while you are away, and towns grow or fade depending on what gets delivered to them.
+A persistent, real-time empire-building sandbox with trading between players on top, built for a small group of friends or coworkers. There is no clock, no rounds and no winner. The world runs all the time: one hour on the clock is one hour in the world, and your empire keeps working while you are away.
 
 It is a sibling of [Hark Urbanism](https://urbanism.felipeharker.org) and shares its look: a quiet planning-map, Overpass type and guide-sign green.
 
 ## How the world works
 
-- **Towns** produce goods from their land (plains grow grain and wool, coasts fish and salt, forests timber, hills stone, mountains iron) and consume what their size calls for. A hamlet wants food, salt and timber. A village also wants cloth, stone, ale and wool, a market town tools and iron, and a city spices from the far frontier. Towns whose needs are met grow; neglected towns shrink.
-- **Prices** follow stock against what the town considers normal, between 0.3× and 3.5× a good's base price, with a 6% spread. Every unit bought or sold moves the price, so flooding a market ruins it. NPC peddlers slowly even out the worst gaps between neighbours.
-- **Caravans** (wagon, mule train, freight convoy) travel in straight lines between towns in real time. Give one a **route** (stops with buy, sell, load and unload orders and price limits) and it trades on its own forever.
-- **Works**: a warehouse stores goods in a town; estates produce local goods into it; weavers, breweries and smithies turn wool, grain, iron and timber into cloth, ale and tools.
-- **Roads** between towns make caravans 1.8× faster, protect them from bandits, help both towns grow, and charge rivals a toll the owner sets. Roads can be sold to other companies.
-- **Events**: droughts, harvests, shoals, festivals, fires, mine collapses, booms, bandits and sickness come and go and show up in the Gazette.
-- **Frontier**: the map starts mostly fogged. More towns are revealed as the known world's population grows, or when a company pays for an expedition (and names the town). A few far towns grow spices.
-- **Each other**: the Exchange has a public notice board and public payments for sealing deals. Standings rank companies by worth, and the Gazette announces milestones and who controls which trade (more than half of a good's volume over the last day).
+**On your own**
+
+- **Land**: the map is a grid of plots over seeded terrain. You found a capital, which comes with the plots around it, then claim neighbouring plots one at a time or found outposts on far-off land. Terrain decides what a plot can do: plains grow grain and wool, forest gives timber, hills stone and wool, mountains iron and stone, and plots beside water take fisheries and saltworks. Some plots are richer than others.
+- **Buildings** go on your plots: farms, pastures, fisheries, saltworks, lumber camps, quarries and mines make raw goods; weavers, breweries and smithies turn wool, grain, and iron with timber into cloth, ale and tools; houses hold people; warehouses hold more goods. Like buildings side by side help each other, and buildings can be upgraded.
+- **People** move into your houses while their needs are met, work your buildings and pay taxes, which is your steady income. A hamlet wants grain, fish, salt and timber.
+- **Ranks**: with enough people you pay for a charter and become a village, market town, city and metropolis. Each rank raises taxes, lets buildings go a level higher and holds more people, and your people start wanting more (cloth, ale, stone and wool, then tools and iron, then spices).
+
+**With each other**
+
+- **The Exchange**: list goods from your stores for a price in cash, in other goods with quantities, or both. Other players can accept the price or send a counter bid in cash or goods, which you accept or decline. Listed goods and bids are held in escrow, and couriers deliver the goods between capitals when a deal is struck.
+- **Neutral towns** are markets run by the world. They produce from their land, consume what their size calls for, and grow or shrink with how well they are supplied. Prices follow stock, between 0.3x and 3.5x a good's base price with a 6% spread, and every unit bought or sold moves them. Your caravans carry what you buy and sell there, and standing orders keep them working while you are offline.
+- **Roads** between towns and settlements make caravans and couriers 1.8x faster, keep bandits off, and charge everyone but the owner a toll. Roads can be sold to other players.
+- **Events** (droughts, harvests, festivals, fires, bandits and more) come and go and show up in the Gazette, and Standings rank empires by worth.
 
 ## Running it
 
@@ -32,14 +37,14 @@ Without `DATABASE_URL` the world and accounts are saved as JSON in `./data`. Wit
 | `WORLD_SEED` | Seed for the first world. Random if unset. |
 | `PORT` | Defaults to 3000. |
 
-The first account created is the admin. From the ☰ menu the admin can reset other players' passwords and **start a new world** (type RESET to confirm): the map, companies, caravans, works and roads are replaced, accounts stay, and the old world is saved to `world_backups` first.
+The first account created is the admin. From the ☰ menu the admin can reset other players' passwords and **start a new world** (type RESET to confirm): the map and every empire are replaced, accounts stay, and the old world is saved to `world_backups` first. A world saved by an older version of the game is backed up and replaced the same way when the server starts.
 
-`npm run simtest` runs a fresh world for a week with no players and prints how towns and prices settle. `node tools/playtest.mjs` checks a company's route, works and roads over two simulated days.
+`npm run smoke` runs the rules end to end without a server (found two empires, build, trade, strike a deal). `npm run simtest` lets a few simple bots run empires for some days and prints how they fare: `node tools/simtest.mjs [days] [players] [seed] [hours between check-ins]`.
 
 ## Code
 
-- `shared/` game data (goods, tiers, vehicles, buildings, pricing) and seeded terrain, used by both server and browser.
-- `server/world.js` world generation, `server/sim.js` the simulation, `server/actions.js` player commands, `server/index.js` auth and the HTTP API, `server/db.js` storage.
+- `shared/` game data (goods, ranks, buildings, costs, pricing), land rules and seeded terrain, used by both server and browser.
+- `server/world.js` world generation, `server/sim.js` the simulation, `server/actions.js` player commands, `server/exchange.js` listings and bids, `server/index.js` auth and the HTTP API, `server/db.js` storage.
 - `public/` the client: `map.js` draws the canvas map, `app.js` everything else. No build step.
 
 ## Deployment
