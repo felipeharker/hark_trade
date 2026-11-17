@@ -17,16 +17,21 @@ const TICK_MS = 20_000;
 const store = await openStore();
 const SECRET = process.env.SESSION_SECRET || (await store.secret());
 
+function freshWorld(seed) {
+  const w = generateWorld(seed);
+  initStocks(w);
+  // let the world settle for a simulated day before anyone arrives
+  const start = w.lastTick;
+  w.lastTick = start - 24 * 3600e3;
+  advance(w, start);
+  w.news = [];
+  w.news.unshift({ t: Date.now(), text: 'The trading season opens. The roads are empty and the markets are waiting.', kind: 'world' });
+  return w;
+}
+
 let world = await store.loadWorld();
 if (!world) {
-  world = generateWorld(process.env.WORLD_SEED ? Number(process.env.WORLD_SEED) : undefined);
-  initStocks(world);
-  // let the world settle for a simulated day before anyone arrives
-  const start = world.lastTick;
-  world.lastTick = start - 24 * 3600e3;
-  advance(world, start);
-  world.news = [];
-  world.news.unshift({ t: Date.now(), text: 'The trading season opens. The roads are empty and the markets are waiting.', kind: 'world' });
+  world = freshWorld(process.env.WORLD_SEED ? Number(process.env.WORLD_SEED) : undefined);
   await store.saveWorld(world);
   console.log('Generated a new world with seed', world.seed);
 } else {
@@ -147,6 +152,24 @@ app.post('/api/password', need, async (req, res) => {
   if (String(nw || '').length < 6) return res.status(400).json({ error: 'Use at least 6 characters.' });
   await store.setPassword(u.id, hashPassword(String(nw)));
   res.json({ ok: true });
+});
+
+// Admin: throw the world away and start a new one. Accounts stay; everyone founds a new company.
+// The old world is kept in world_backups first.
+app.post('/api/admin/reset', need, async (req, res) => {
+  if (!req.user.is_admin) return res.status(403).json({ error: 'Admins only.' });
+  if (req.body?.confirm !== 'RESET') return res.status(400).json({ error: 'Type RESET to confirm.' });
+  try {
+    advance(world);
+    await store.backupWorld(world);
+    world = freshWorld();
+    await store.saveWorld(world);
+    console.log(`World reset by ${req.user.username}; new seed ${world.seed}`);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('reset failed', e);
+    res.status(500).json({ error: 'Reset failed. The old world is untouched.' });
+  }
 });
 
 // Admin: reset someone's password (the first account created is the admin).

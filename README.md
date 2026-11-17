@@ -32,7 +32,7 @@ Without `DATABASE_URL` the world and accounts are saved as JSON in `./data`. Wit
 | `WORLD_SEED` | Seed for the first world. Random if unset. |
 | `PORT` | Defaults to 3000. |
 
-The first account created is the admin and can reset other players' passwords from the ☰ menu.
+The first account created is the admin. From the ☰ menu the admin can reset other players' passwords and **start a new world** (type RESET to confirm): the map, companies, caravans, works and roads are replaced, accounts stay, and the old world is saved to `world_backups` first.
 
 `npm run simtest` runs a fresh world for a week with no players and prints how towns and prices settle. `node tools/playtest.mjs` checks a company's route, works and roads over two simulated days.
 

@@ -485,6 +485,9 @@ function menuHtml(me) {
     <button class="btn" data-act="theme" data-id="">Match system</button><button class="btn" data-act="theme" data-id="light">Light</button><button class="btn" data-act="theme" data-id="dark">Dark</button></div></div>
   <div class="section"><h4>Change password</h4>
     <div class="row"><input class="in" type="password" placeholder="Current" data-input="pw-cur"><input class="in" type="password" placeholder="New" data-input="pw-new"><button class="btn" data-act="pw">Change</button></div></div>
+  ${me.admin ? `<div class="section"><h4>Admin: start a new world</h4>
+    <p class="note" style="margin-top:0">Wipes the map, every company, caravan, building and road, and starts over with a fresh map. Accounts and passwords stay; everyone founds a new company. The old world is kept as a backup.</p>
+    <div class="row"><input class="in" placeholder="Type RESET" data-input="reset-confirm"><button class="btn danger" data-act="admin-reset">Start a new world</button></div></div>` : ''}
   ${me.admin ? `<div class="section"><h4>Admin: reset a password</h4>
     <div class="row"><input class="in" placeholder="Username" data-input="ad-user"><input class="in" placeholder="New password" data-input="ad-pw"><button class="btn" data-act="admin-pw">Reset</button></div></div>` : ''}
   <div class="section"><button class="btn danger" data-act="logout">Sign out</button></div>`;
@@ -600,6 +603,12 @@ document.addEventListener('click', async (e) => {
     }
     case 'pw': try { await api('/api/password', { current: val('pw-cur'), next: val('pw-new') }); toast('Password changed'); } catch (err) { toast(err.message, true); } break;
     case 'admin-pw': try { await api('/api/admin/password', { username: val('ad-user'), password: val('ad-pw') }); toast('Password reset'); } catch (err) { toast(err.message, true); } break;
+    case 'admin-reset': {
+      if (val('reset-confirm') !== 'RESET') { toast('Type RESET in the box to confirm.', true); break; }
+      if (!confirm('Really start a new world for everyone?')) break;
+      try { await api('/api/admin/reset', { confirm: 'RESET' }); location.reload(); } catch (err) { toast(err.message, true); }
+      break;
+    }
     case 'logout': await api('/api/logout', {}); location.reload(); break;
     // route editor
     case 'r-add': d.stops.push({ town: '', orders: [] }); renderRoute(); break;
