@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { openStore } from './db.js';
 import { generateWorld } from './world.js';
 import { advance, initStocks, townEconomy, prices, netWorth, townById, warehouseCap } from './sim.js';
-import { ACTIONS, createCompany, GameError } from './actions.js';
+import { ACTIONS as BASE_ACTIONS, createCompany, GameError } from './actions.js';
+import { EXCHANGE, ExchangeError } from './exchange.js';
+const ACTIONS = { ...BASE_ACTIONS, ...EXCHANGE };
 import { tierIndex, TIERS, GOOD_IDS } from '../shared/data.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -232,6 +234,13 @@ function publicState(user) {
     news: world.news.slice(0, 120),
     board: world.board.slice(0, 60),
     offers: me ? (world.offers || []).filter((o) => o.to === me.id || o.from === me.id) : [],
+    // Bids are private between bidder and seller; others only see how many there are.
+    listings: (world.listings || []).map((l) => ({
+      ...l,
+      bids: me && l.seller === me.id ? l.bids : l.bids.filter((b) => me && b.bidder === me.id),
+      bidCount: l.bids.length,
+    })),
+    pickups: me ? Object.fromEntries(Object.entries(world.pickups?.[me.id] || {}).map(([t, g]) => [t, Object.fromEntries(Object.entries(g).map(([k, v]) => [k, Math.floor(v)]).filter(([, v]) => v > 0))]).filter(([, g]) => Object.keys(g).length)) : {},
     me: me ? { id: me.id, name: me.name, color: me.color, cash: me.cash, home: me.home, log: me.log.slice(0, 60), stats: me.stats, worth: Math.round(netWorth(world, me)) } : null,
   };
 }
@@ -254,7 +263,7 @@ app.post('/api/company', need, async (req, res) => {
     save();
     res.json(publicState(req.user));
   } catch (e) {
-    if (e instanceof GameError) return res.status(400).json({ error: e.message });
+    if (e instanceof GameError || e instanceof ExchangeError) return res.status(400).json({ error: e.message });
     console.error(e); res.status(500).json({ error: 'Something went wrong.' });
   }
 });
@@ -271,7 +280,7 @@ app.post('/api/action', need, (req, res) => {
     save();
     res.json({ ...r, state: publicState(req.user) });
   } catch (e) {
-    if (e instanceof GameError) return res.status(400).json({ error: e.message });
+    if (e instanceof GameError || e instanceof ExchangeError) return res.status(400).json({ error: e.message });
     console.error(e); res.status(500).json({ error: 'Something went wrong.' });
   }
 });
