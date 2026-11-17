@@ -1,0 +1,29 @@
+databases:
+  - name: hark-trade-db
+    databaseName: hark_trade_db
+    user: hark_trade_db_user
+    plan: basic-256mb
+    region: oregon
+    postgresMajorVersion: "17"
+    diskSizeGB: 1
+
+services:
+  - type: web
+    name: hark-trade
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: main
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: hark-trade-db
+          property: connectionString
+      - key: INVITE_CODE
+        sync: false
