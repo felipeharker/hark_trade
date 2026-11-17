@@ -1,0 +1,17 @@
+{
+  "name": "hark-trade",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A persistent, real-time sandbox of rival trading companies for a small group.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "simtest": "node tools/simtest.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}
