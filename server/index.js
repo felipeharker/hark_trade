@@ -4,10 +4,17 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openStore } from './db.js';
-import { generateWorld } from './world.js';
-import { advance, initStocks, townEconomy, prices, netWorth, townById, warehouseCap } from './sim.js';
-import { ACTIONS, createCompany, GameError } from './actions.js';
-import { tierIndex, TIERS, GOOD_IDS } from '../shared/data.js';
+import zlib from 'node:zlib';
+import { generateWorld, WORLD_VERSION } from './world.js';
+import {
+  advance, initStocks, townEconomy, prices, netWorth, townById, empireEconomy, buildingsOf, idleCaravans, homeFor, tollsDue,
+  capitalOf, route,
+} from './sim.js';
+import { ACTIONS as BASE_ACTIONS, createEmpire, GameError } from './actions.js';
+import { EXCHANGE } from './exchange.js';
+import { tierIndex, TIERS, GOOD_IDS, COURIER_SPEED } from '../shared/data.js';
+
+const ACTIONS = { ...BASE_ACTIONS, ...EXCHANGE };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 3000);
@@ -24,12 +31,19 @@ function freshWorld(seed) {
   const start = w.lastTick;
   w.lastTick = start - 24 * 3600e3;
   advance(w, start);
+  w.clockHours = 0; // day one starts when the land opens to players
   w.news = [];
-  w.news.unshift({ t: Date.now(), text: 'The trading season opens. The roads are empty and the markets are waiting.', kind: 'world' });
+  w.news.unshift({ t: Date.now(), text: 'A new land lies open. The towns are trading, and the country between them is waiting to be settled.', kind: 'world' });
   return w;
 }
 
 let world = await store.loadWorld();
+if (world && world.version !== WORLD_VERSION) {
+  // An older kind of world cannot be carried over. Keep it as a backup and start again; accounts are untouched.
+  await store.backupWorld(world, true);
+  console.log(`Found a version ${world.version ?? 1} world; backed it up and starting a version ${WORLD_VERSION} world`);
+  world = null;
+}
 if (!world) {
   world = freshWorld(process.env.WORLD_SEED ? Number(process.env.WORLD_SEED) : undefined);
   await store.saveWorld(world);
@@ -142,7 +156,7 @@ app.post('/api/logout', (req, res) => {
 
 app.get('/api/me', (req, res) => {
   if (!req.user) return res.json({ user: null, inviteRequired: !!INVITE_CODE });
-  res.json({ user: { id: req.user.id, username: req.user.username, admin: req.user.is_admin }, company: !!world.companies[cid(req.user)] });
+  res.json({ user: { id: req.user.id, username: req.user.username, admin: req.user.is_admin }, empire: !!world.empires[cid(req.user)] });
 });
 
 app.post('/api/password', need, async (req, res) => {
@@ -154,14 +168,14 @@ app.post('/api/password', need, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Admin: throw the world away and start a new one. Accounts stay; everyone founds a new company.
+// Admin: throw the world away and start a new one. Accounts stay; everyone founds a new empire.
 // The old world is kept in world_backups first.
 app.post('/api/admin/reset', need, async (req, res) => {
   if (!req.user.is_admin) return res.status(403).json({ error: 'Admins only.' });
   if (req.body?.confirm !== 'RESET') return res.status(400).json({ error: 'Type RESET to confirm.' });
   try {
     advance(world);
-    await store.backupWorld(world);
+    await store.backupWorld(world, true);
     world = freshWorld();
     await store.saveWorld(world);
     console.log(`World reset by ${req.user.username}; new seed ${world.seed}`);
@@ -183,76 +197,119 @@ app.post('/api/admin/password', need, async (req, res) => {
 });
 
 // ---------- game API ----------
+const r2 = (n) => Math.round(n * 100) / 100;
+const whole = (o) => Object.fromEntries(Object.entries(o || {}).map(([g, q]) => [g, Math.floor(q + 1e-6)]).filter(([, q]) => q > 0));
+
+function sendJson(req, res, obj) {
+  const body = JSON.stringify(obj);
+  if (body.length < 2000 || !/\bgzip\b/.test(req.headers['accept-encoding'] || '')) return res.type('json').send(body);
+  zlib.gzip(body, { level: 5 }, (err, buf) => {
+    if (err) return res.type('json').send(body);
+    res.set({ 'Content-Type': 'application/json; charset=utf-8', 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' }).send(buf);
+  });
+}
+
 function publicState(user) {
-  const me = user ? world.companies[cid(user)] : null;
-  const towns = world.towns.filter((t) => t.known).map((t) => {
+  const me = user ? world.empires[cid(user)] : null;
+  const towns = world.towns.map((t) => {
     const econ = townEconomy(world, t);
     const p = prices(world, t, econ);
     const market = {};
     for (const g of GOOD_IDS) market[g] = {
-      stock: Math.floor(t.stock[g]), buy: +p[g].buy.toFixed(2), sell: +p[g].sell.toFixed(2),
-      prod: +econ.prod[g].toFixed(2), cons: +econ.cons[g].toFixed(2),
+      stock: r2(t.stock[g]), target: r2(econ.target[g]), buy: r2(p[g].buy), sell: r2(p[g].sell),
+      prod: r2(econ.prod[g]), cons: r2(econ.cons[g]),
     };
     return {
-      id: t.id, name: t.name, x: t.x, y: t.y, terrain: t.terrain, coastal: t.coastal,
+      id: t.id, name: t.name, x: t.x, y: t.y, tx: t.tx, ty: t.ty, terrain: t.terrain, coastal: t.coastal,
       pop: Math.round(t.pop), tier: tierIndex(t.pop), sat: +t.sat.toFixed(3), resources: t.resources,
-      market, foundedBy: t.foundedBy, trend: t.popHist.length > 24 ? Math.round(t.pop - t.popHist[t.popHist.length - 24]) : null,
+      market, trend: t.popHist.length > 24 ? Math.round(t.pop - t.popHist[t.popHist.length - 24]) : null,
     };
   });
-  const companies = Object.values(world.companies).map((c) => ({
-    id: c.id, name: c.name, color: c.color, home: c.home, worth: Math.round(netWorth(world, c)), worthHist: c.worthHist.slice(-72),
-    monopolies: Object.entries(world.monopolies).filter(([, id]) => id === c.id).map(([g]) => g),
+  const counts = {};
+  for (const b of world.buildings) counts[b.owner] = (counts[b.owner] || 0) + 1;
+  const empires = Object.values(world.empires).map((e) => ({
+    id: e.id, name: e.name, color: e.color, tier: e.tier, pop: Math.round(e.pop), land: e.land || 0, buildings: counts[e.id] || 0,
+    worth: Math.round(netWorth(world, e)), worthHist: e.worthHist.slice(-72),
+    leads: Object.entries(world.leaders).filter(([, id]) => id === e.id).map(([g]) => g),
   }));
-  const caravans = world.caravans.map((c) => {
-    const mine = me && c.owner === me.id;
-    const n = Object.values(c.cargo).reduce((a, b) => a + b, 0);
-    return {
-      id: c.id, owner: c.owner, type: c.type, name: c.name, at: c.at, from: c.from, to: c.to,
-      departAt: c.departAt, arriveAt: c.arriveAt, viaRoad: c.viaRoad, load: Math.floor(n),
-      cargo: mine ? Object.fromEntries(Object.entries(c.cargo).map(([g, q]) => [g, Math.floor(q)]).filter(([, q]) => q > 0)) : undefined,
-      route: mine ? c.route : c.route ? { stops: c.route.stops.map((s) => ({ town: s.town })) } : null,
+  const buildings = world.buildings.map((b) => ({
+    id: b.id, type: b.type, owner: b.owner, s: b.s, tx: b.tx, ty: b.ty, level: b.level || 1, paused: b.paused || undefined,
+    ...(me && b.owner === me.id ? { idle: b.idle || undefined, rich: b.rich, adj: b.adj } : {}),
+  }));
+  const trips = world.trips.map((t) => ({
+    id: t.id, owner: t.owner, kind: t.kind, from: t.from, to: t.to, pts: t.pts, cum: t.cum,
+    departAt: t.departAt, arriveAt: t.arriveAt, returnAt: t.returnAt, caravans: t.caravans,
+    ...(me && t.owner === me.id ? { cargo: whole(t.cargo), why: t.why, risk: t.risk || undefined } : {}),
+  }));
+  let mine = null;
+  if (me) {
+    const ec = empireEconomy(world, me, buildingsOf(world, me.id));
+    const reach = {};
+    for (const t of world.towns) {
+      const h = homeFor(world, me, t.id);
+      if (h) reach[t.id] = { hours: r2(h.rt.hours), from: h.s.id, toll: tollsDue(world, h.rt, me.id).reduce((a, r) => a + r.toll, 0), road: h.rt.roads.length > 0 };
+    }
+    const couriers = {};
+    const cap = capitalOf(world, me.id);
+    for (const o of Object.values(world.empires)) {
+      if (o.id === me.id) continue;
+      const oc = capitalOf(world, o.id);
+      const rt = cap && oc ? route(world, cap.id, oc.id, COURIER_SPEED) : null;
+      if (rt) couriers[o.id] = r2(rt.hours);
+    }
+    const stock = {};
+    for (const g of GOOD_IDS) stock[g] = r2(me.stock[g] || 0);
+    mine = {
+      id: me.id, name: me.name, color: me.color, cash: r2(me.cash), tier: me.tier, pop: r2(me.pop), sat: +me.sat.toFixed(3), fill: me.fill || {},
+      stock, cap: ec.cap, housing: ec.housing, jobs: ec.jobs, workers: Math.floor(ec.workers), staff: +ec.staff.toFixed(3),
+      caravans: me.caravans, idle: idleCaravans(world, me), extra: me.extra || 0, land: me.land || 0,
+      prod: Object.fromEntries(GOOD_IDS.map((g) => [g, r2(ec.prod[g])])),
+      use: Object.fromEntries(GOOD_IDS.map((g) => [g, r2(ec.use[g])])),
+      cons: Object.fromEntries(GOOD_IDS.map((g) => [g, r2(ec.cons[g])])),
+      tax: r2(ec.tax), upkeep: r2(ec.upkeep), upkeepParts: { buildings: r2(ec.buildingUpkeep), caravans: r2(ec.caravanUpkeep), roads: r2(ec.roadUpkeep) },
+      orders: me.orders || [], reach, couriers,
+      log: me.log.slice(0, 80), stats: me.stats, worth: Math.round(netWorth(world, me)),
     };
-  });
-  const buildings = world.buildings.map((b) => {
-    const mine = me && b.owner === me.id;
-    return {
-      id: b.id, type: b.type, owner: b.owner, town: b.town, good: b.good, level: b.level, idle: b.idle,
-      stock: mine && b.stock ? Object.fromEntries(Object.entries(b.stock).map(([g, q]) => [g, Math.floor(q)]).filter(([, q]) => q > 0)) : undefined,
-      cap: b.type === 'warehouse' ? warehouseCap(b) : undefined,
-    };
-  });
+  }
   return {
     now: Date.now(),
     clock: world.clockHours,
     seed: world.seed,
-    hiddenLeft: world.towns.filter((t) => !t.known).length,
-    towns, companies, caravans, buildings,
+    towns, empires, buildings, trips,
+    settlements: world.settlements,
+    tiles: Object.entries(world.tiles).map(([k, t]) => [k, t.o, t.s]),
     roads: world.roads,
     events: world.events.map((e) => ({ id: e.id, type: e.type, town: e.town, radius: e.radius, until: e.until, text: e.text })),
     news: world.news.slice(0, 120),
     board: world.board.slice(0, 60),
-    offers: me ? (world.offers || []).filter((o) => o.to === me.id || o.from === me.id) : [],
-    me: me ? { id: me.id, name: me.name, color: me.color, cash: me.cash, home: me.home, log: me.log.slice(0, 60), stats: me.stats, worth: Math.round(netWorth(world, me)) } : null,
+    // Bids are private between bidder and seller; everyone else only sees how many there are.
+    listings: world.listings.map((l) => ({
+      ...l,
+      bids: l.bids.filter((b) => me && (l.seller === me.id || b.bidder === me.id)),
+      bidCount: l.bids.length,
+    })),
+    offers: me ? world.offers.filter((o) => o.to === me.id || o.from === me.id) : [],
+    me: mine,
   };
 }
 
 app.get('/api/state', need, (req, res) => {
   advance(world);
-  res.json(publicState(req.user));
+  sendJson(req, res, publicState(req.user));
 });
 
 app.get('/api/town/:id', need, (req, res) => {
   const t = townById(world, req.params.id);
-  if (!t || !t.known) return res.status(404).json({ error: 'Unknown town.' });
+  if (!t) return res.status(404).json({ error: 'Unknown town.' });
   res.json({ id: t.id, priceHist: t.priceHist, popHist: t.popHist.slice(-72), tierName: TIERS[tierIndex(t.pop)].name });
 });
 
-app.post('/api/company', need, async (req, res) => {
+app.post('/api/empire', need, async (req, res) => {
   try {
     advance(world);
-    createCompany(world, cid(req.user), req.body || {});
+    createEmpire(world, cid(req.user), req.body || {});
     save();
-    res.json(publicState(req.user));
+    sendJson(req, res, publicState(req.user));
   } catch (e) {
     if (e instanceof GameError) return res.status(400).json({ error: e.message });
     console.error(e); res.status(500).json({ error: 'Something went wrong.' });
@@ -261,18 +318,18 @@ app.post('/api/company', need, async (req, res) => {
 
 app.post('/api/action', need, (req, res) => {
   const a = req.body || {};
-  const co = world.companies[cid(req.user)];
-  if (!co) return res.status(400).json({ error: 'Found your company first.' });
+  const e = world.empires[cid(req.user)];
+  if (!e) return res.status(400).json({ error: 'Found your empire first.' });
   const fn = Object.hasOwn(ACTIONS, a.type) ? ACTIONS[a.type] : null;
   if (!fn) return res.status(400).json({ error: 'Unknown action.' });
   try {
     advance(world);
-    const r = fn(world, co, a) || {};
+    const r = fn(world, e, a) || {};
     save();
-    res.json({ ...r, state: publicState(req.user) });
-  } catch (e) {
-    if (e instanceof GameError) return res.status(400).json({ error: e.message });
-    console.error(e); res.status(500).json({ error: 'Something went wrong.' });
+    sendJson(req, res, { ...r, state: publicState(req.user) });
+  } catch (err) {
+    if (err instanceof GameError) return res.status(400).json({ error: err.message });
+    console.error(err); res.status(500).json({ error: 'Something went wrong.' });
   }
 });
 
