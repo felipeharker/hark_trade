@@ -2,7 +2,7 @@
 import { makeTerrain, mulberry32, TILES_W, TILES_H, tileCenter } from '../shared/terrain.js';
 import { TERRAIN_GOODS, GOOD_IDS, dist } from '../shared/data.js';
 
-export const WORLD_VERSION = 2;
+export const WORLD_VERSION = 3;
 
 const PRE = ['Ash', 'Bram', 'Cold', 'Dun', 'Elder', 'Fen', 'Gold', 'Hay', 'Iron', 'Kings', 'Lark', 'Mill', 'North', 'Oak', 'Pike', 'Red', 'Salt', 'Thorn', 'Wick', 'Wold', 'Black', 'Stone', 'High', 'Low', 'Marsh', 'Har', 'Brack', 'Gil', 'Tarn', 'Wen', 'Cray', 'Ulver', 'Rook', 'Sedge', 'Bar', 'Lin', 'Mor', 'Ves', 'Quill', 'Hollin'];
 const SUF = ['ford', 'bury', 'ton', 'wick', 'stead', 'mouth', 'field', 'haven', 'more', 'dale', 'gate', 'holm', 'by', 'well', 'mere', 'cross', 'brook', 'stow', 'ham', 'reach', 'combe', 'ley', 'thorpe', 'march'];
@@ -24,7 +24,8 @@ function balanced(seed) {
     c[t.tile(tx, ty).kind]++;
     if (t.coastal(tx, ty)) coast++;
   }
-  return c.water >= 140 && c.water <= 900 && coast >= 110 && c.mountains >= 110 && c.hills >= 300 && c.forest >= 600 && c.plains >= 1500;
+  const n = (TILES_W * TILES_H) / 4400; // thresholds were set on an 80 by 55 map
+  return c.water >= 140 * n && c.water <= 900 * n && coast >= 110 * n && c.mountains >= 110 * n && c.hills >= 300 * n && c.forest >= 600 * n && c.plains >= 1500 * n;
 }
 
 export function pickSeed() {
@@ -35,7 +36,7 @@ export function pickSeed() {
   return 42;
 }
 
-const TOWN_COUNT = 18;
+const TOWN_COUNT = 54;
 
 export function generateWorld(seed = pickSeed()) {
   const rand = mulberry32(seed);
@@ -73,7 +74,7 @@ export function generateWorld(seed = pickSeed()) {
   }
   // Between them the towns must offer every raw good, or an empire on the wrong land would have nowhere to turn.
   // Hand each scarce good to the towns furthest from anyone already making it.
-  const QUOTA = { stone: 4, iron: 3, timber: 4, fish: 4, salt: 4, wool: 4, grain: 5 };
+  const QUOTA = { stone: 11, iron: 9, timber: 11, fish: 11, salt: 11, wool: 11, grain: 14 };
   for (const [good, quota] of Object.entries(QUOTA)) {
     for (;;) {
       const makers = towns.filter((t) => t.resources.some((r) => r.good === good));
@@ -91,7 +92,12 @@ export function generateWorld(seed = pickSeed()) {
   }
   // A few far-off towns grow spices, which nobody can make at home.
   const capital = towns[0];
-  const far = towns.slice(1).sort((p, q) => dist(q, capital) - dist(p, capital)).slice(0, 3);
+  const outer = towns.slice(1).sort((p, q) => dist(q, capital) - dist(p, capital)).slice(0, 18);
+  const far = [outer[0]];
+  while (far.length < 5) { // spread around the rim, not all in one corner
+    const spread = (t) => Math.min(...far.map((f) => dist(f, t)));
+    far.push(outer.filter((t) => !far.includes(t)).sort((p, q) => spread(q) - spread(p))[0]);
+  }
   for (const t of far) t.resources.push({ good: 'spices', rich: +(0.7 + rand() * 0.5).toFixed(2) });
   for (const t of towns) for (const g of GOOD_IDS) t.stock[g] = 0;
   return {

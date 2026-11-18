@@ -1,7 +1,7 @@
 // Deterministic terrain from a seed, so the server and every browser draw the same land.
 
-export const MAP_W = 1600;
-export const MAP_H = 1100;
+export const MAP_W = 3200;
+export const MAP_H = 2200;
 // The land is divided into square plots. Everything a player builds sits on one plot.
 export const TILE = 20;
 export const TILES_W = MAP_W / TILE;
@@ -57,17 +57,19 @@ export function makeTerrain(seed) {
     // a gentle bowl so the edges are wilder and the middle is settled plains
     const dx = x / MAP_W - 0.5, dy = y / MAP_H - 0.5;
     const r = Math.sqrt(dx * dx + dy * dy);
-    e = e * 0.85 + r * 0.35 - 0.06;
+    // plus broad highlands and lowlands, so a big map has regions and not one even mix
+    const region = valueNoise(x / 820 + 11, y / 820 - 5, seed + 333) - 0.5;
+    e = e * 0.85 + r * 0.2 + region * 0.3 - 0.005;
     const m = fbm(nx * 1.3 + 40, ny * 1.3 + 40, seed + 7, 4);
     return { e, m };
   }
   function kind(x, y) {
     const { e, m } = sample(x, y);
-    if (e < 0.33) return 'water';
-    if (e > 0.74) return 'mountains';
+    if (e < 0.345) return 'water';
+    if (e > 0.72) return 'mountains';
     if (e > 0.63) return 'hills';
     if (m > 0.56) return 'forest';
-    if (e < 0.37 && m > 0.48) return 'marsh';
+    if (e < 0.385 && m > 0.48) return 'marsh';
     return 'plains';
   }
   function nearWater(x, y, r = 34) {

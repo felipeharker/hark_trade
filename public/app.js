@@ -54,7 +54,7 @@ let S = null; // latest server state
 let skew = 0;
 let me = null; // signed-in user
 const ui = {
-  sel: null, tab: 'stores', sideOpen: window.innerWidth > 760, qty: 40, newsOpen: true, townCache: {}, modal: null, lastLog: 0,
+  sel: null, tab: 'stores', sideOpen: true, newsTab: 'world', qty: 40, newsOpen: true, townCache: {}, modal: null, lastLog: 0,
   found: { name: '', seat: '', color: null, at: null },
   ex: { tab: 'listings', offer: [{ good: '', qty: '' }], askCash: '', askGoods: [], note: '', bid: null },
   order: { op: 'sell', good: 'grain', level: 50, limit: 0 },
@@ -73,13 +73,35 @@ const map = window.__map = new MapView($('#map'), {
   onTool: (hit) => useTool(hit),
 });
 
-const small = () => window.innerWidth <= 760;
+// An upright phone shows one thing at a time: a bar of sections along the bottom and sheets that rise above it.
+const PHONE = matchMedia('(max-width: 720px) and (min-height: 541px), (max-width: 540px)');
+const small = () => PHONE.matches;
+const TOUCH = matchMedia('(pointer: coarse)').matches;
+const Tap = TOUCH ? 'Tap' : 'Click', tap = TOUCH ? 'tap' : 'click';
+
+// Tell the map which of its edges the interface covers, so "centre" and "whole map" mean the part you can see.
+function layout() {
+  const founding = $('#side').classList.contains('founding');
+  if (small()) map.pad = { l: 0, r: 0, t: founding ? 0 : $('#topbar').offsetHeight || 88, b: founding ? Math.round(window.innerHeight * 0.5) : $('#nav').offsetHeight || 57 };
+  else map.pad = { l: 340, r: ui.sel && !founding ? 440 : 0, t: founding ? 0 : $('#topbar').offsetHeight || 52, b: 0 };
+}
+
 function select(sel) {
   ui.sel = sel;
-  if (sel && small() && ui.sideOpen) { ui.sideOpen = false; renderSide(); }
+  if (sel && small() && (ui.sideOpen || ui.modal)) { ui.sideOpen = false; closeModal(); renderSide(); }
   map.sel = sel;
   if (sel?.kind === 'town') loadTownDetail(sel.id);
   renderInspector(true);
+  if (sel && small()) reveal(sel);
+}
+
+// On a phone the sheet covers the lower half: slide the map so what you picked stays in sight.
+function reveal(sel) {
+  const p = sel.kind === 'town' ? T(sel.id) : sel.kind === 'tile' ? { x: sel.tx * 20 + 10, y: sel.ty * 20 + 10 } : null;
+  if (!p) return;
+  const [, sy] = map.toScreen(p.x, p.y);
+  const top = $('#inspector').offsetTop;
+  if (sy > top - 30) map.oy -= sy - (top - 70);
 }
 
 async function loadTownDetail(id) {
@@ -104,7 +126,7 @@ function apply(st) {
     if (fresh.length) toast(fresh[0].text);
   }
   ui.lastLog = newest || ui.lastLog || 1;
-  renderTop(); renderSide(); renderInspector(); renderNews(); renderModal();
+  renderTop(); renderSide(); renderInspector(); renderNews(); renderModal(); renderNav();
   if (map.tool) renderPickbar();
 }
 
@@ -144,6 +166,21 @@ function spark(vals, w = 40, h = 14, upGood = false) {
   const up = vals[vals.length - 1] >= vals[0];
   return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="${up === upGood ? 'var(--good)' : 'var(--bad)'}" stroke-width="1.3"/></svg>`;
 }
+const ICONS = {
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  chart: '<path d="M5 20V11M12 20V5M19 20v-6M3 20h18"/>',
+  hammer: '<path d="M13.5 4.5l6 6-2.5 2.5-6-6zM12.5 8.5L4 17l3 3 8.5-8.5"/>',
+  hall: '<path d="M4 20h16M6 20v-8M18 20v-8M10 20v-5h4v5M3 11l9-7 9 7"/>',
+  cart: '<path d="M3 6h11v9H3zM14 9h4l3 3v3h-7"/><circle cx="7.5" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/>',
+  swap: '<path d="M8 4L4 8l4 4M4 8h13M16 12l4 4-4 4M20 16H7"/>',
+  news: '<path d="M4 5h12v14H6a2 2 0 0 1-2-2zM16 9h4v8a2 2 0 0 1-2 2H6M7.5 9h5M7.5 12.5h5M7.5 16h3"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.6 2.3c-.8.5-1.2 1-1.2 1.9M12 17h.01"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.4 3 14.6 0 18M12 3c-3 3.4-3 14.6 0 18"/>',
+  flag: '<path d="M6 21V4M6 4h11l-2.4 4L17 12H6"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  out: '<path d="M10 4H5v16h5M14 8l4 4-4 4M18 12H9"/>',
+};
+const icon = (name, px = 20) => `<svg class="ic" width="${px}" height="${px}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 const LOGO = (px = 16) => `<svg width="${px}" height="${px}" viewBox="0 0 32 32"><path d="M5 24 L16 7 L27 24" stroke="white" stroke-width="3.5" fill="none" stroke-linejoin="round"/><circle cx="16" cy="24" r="3" fill="white"/></svg>`;
 
 // ---------- top bar ----------
@@ -152,19 +189,36 @@ function renderTop() {
   const day = Math.floor(S.clock / 24) + 1;
   const net = m.tax - m.upkeep;
   const news = S.listings.filter((l) => l.seller !== m.id).length + S.listings.filter((l) => l.seller === m.id).reduce((a, l) => a + l.bidCount, 0);
+  const badge = news ? `<span class="badge">${news}</span>` : '';
   $('#topbar').innerHTML = `
-    <div class="brand"><span class="mark">${LOGO()}</span><span class="hide-sm">Saltroad</span> <small class="hide-sm">Day ${day}</small></div>
-    <button class="cohead linkish-plain" data-act="home" title="Go to your capital">${swatch(m.color)}${esc(m.name)} <small>${TIERS[m.tier].name}</small></button>
-    <div class="stat"><b class="num ${m.cash < 0 ? 'bad' : ''}">${money(m.cash)}</b><span>Cash <i class="${net < 0 ? 'bad' : 'good'}">${perHour(net)}/h</i></span></div>
-    <div class="stat"><b class="num">${Math.floor(m.pop).toLocaleString('en-US')}<small> / ${m.housing.toLocaleString('en-US')}</small></b><span>People</span></div>
-    <div class="stat hide-sm"><b class="num ${m.sat < 0.5 ? 'bad' : m.sat < 0.75 ? 'warn' : ''}">${Math.round(m.sat * 100)}%</b><span>Needs met</span></div>
-    <div class="stat hide-sm"><b class="num">${m.idle}<small> / ${m.caravans}</small></b><span>Caravans home</span></div>
+    <div class="brand"><span class="mark">${LOGO()}</span><span>Saltroad</span> <small>Day ${day}</small></div>
+    <button class="cohead linkish-plain" data-act="home" title="Go to your capital">${swatch(m.color)}<span class="nm">${esc(m.name)}</span> <small>${TIERS[m.tier].name}</small></button>
+    <div class="kpis">
+      <span class="day">Day ${day}</span>
+      <div class="stat"><b class="num ${m.cash < 0 ? 'bad' : ''}">${money(m.cash)}</b><span>Cash <i class="${net < 0 ? 'bad' : 'good'}">${perHour(net)}/h</i></span></div>
+      <div class="stat"><b class="num">${Math.floor(m.pop).toLocaleString('en-US')}<small> / ${m.housing.toLocaleString('en-US')}</small></b><span>People</span></div>
+      <div class="stat"><b class="num ${m.sat < 0.5 ? 'bad' : m.sat < 0.75 ? 'warn' : ''}">${Math.round(m.sat * 100)}%</b><span>Needs<em> met</em></span></div>
+      <div class="stat"><b class="num">${m.idle}<small> / ${m.caravans}</small></b><span>Caravans<em> home</em></span></div>
+    </div>
     <div class="spacer"></div>
-    <button class="btn ghost hide-sm" data-act="world" title="See the whole map">World</button>
-    <button class="btn ghost" data-act="exchange">Exchange${news ? ` <span class="badge">${news}</span>` : ''}</button>
-    <button class="btn ghost hide-sm" data-act="ledger">Standings</button>
-    <button class="btn ghost hide-sm" data-act="help">How to play</button>
-    <button class="btn ghost" data-act="menu" aria-label="Menu">☰</button>`;
+    <div class="tb-actions">
+      <button class="btn ghost t-world" data-act="world" title="See the whole map" aria-label="Whole map">${icon('globe', 18)}<span class="lbl">World</span></button>
+      <button class="btn ghost t-ex" data-act="exchange" title="Trade with the other empires">${icon('swap', 18)}<span class="lbl">Exchange</span>${badge}</button>
+      <button class="btn ghost t-led" data-act="ledger" title="Standings" aria-label="Standings">${icon('chart', 18)}<span class="lbl">Standings</span></button>
+      <button class="btn ghost t-help" data-act="help" title="How to play" aria-label="How to play">${icon('help', 18)}<span class="lbl">How to play</span></button>
+      <button class="btn ghost t-menu" data-act="menu" title="Menu" aria-label="Menu">${icon('menu', 18)}</button>
+    </div>`;
+}
+
+// ---------- bottom bar (phones) ----------
+function renderNav() {
+  const el = $('#nav');
+  if (!S?.me) return;
+  const m = S.me;
+  const news = S.listings.filter((l) => l.seller !== m.id).length + S.listings.filter((l) => l.seller === m.id).reduce((a, l) => a + l.bidCount, 0);
+  const on = ui.modal === 'exchange' ? 'exchange' : ui.modal ? '' : ui.sideOpen ? ui.tab : map.tool && !map.tool.capital && map.tool.type !== 'place' ? 'build' : '';
+  const items = [['stores', 'hall', 'Empire'], ['build', 'hammer', 'Build'], ['trade', 'cart', 'Trade'], ['exchange', 'swap', 'Exchange'], ['log', 'news', 'News']];
+  el.innerHTML = items.map(([k, ic, n]) => `<button class="navb" data-act="nav" data-id="${k}" aria-pressed="${on === k}">${icon(ic, 22)}<span>${n}</span>${k === 'exchange' && news ? `<i class="badge">${news}</i>` : ''}</button>`).join('');
 }
 
 // ---------- left panel ----------
@@ -177,8 +231,10 @@ function renderSide() {
   const body = ui.tab === 'stores' ? storesHtml() : ui.tab === 'build' ? buildHtml() : ui.tab === 'trade' ? tradeHtml() : logHtml();
   const scroll = $('.scroll', el)?.scrollTop || 0;
   el.classList.toggle('shut', !ui.sideOpen);
-  el.innerHTML = `<div class="tabs">${tabs.map(([k, n]) => `<button class="tab ${ui.tab === k ? 'on' : ''}" data-act="tab" data-id="${k}">${n}</button>`).join('')}</div><div class="scroll">${body}</div>`;
+  const title = { stores: 'Your empire', build: 'Build', trade: 'Trade', log: 'News' }[ui.tab];
+  el.innerHTML = `<div class="phead sheet-head"><h2>${title}</h2><button class="btn ghost tiny x" data-act="side-close" aria-label="Close">${icon('x', 18)}</button></div><div class="tabs">${tabs.map(([k, n]) => `<button class="tab ${ui.tab === k ? 'on' : ''}" data-act="tab" data-id="${k}">${n}</button>`).join('')}</div><div class="scroll">${body}</div>`;
   $('.scroll', el).scrollTop = scroll;
+  renderNav();
 }
 
 function rankHtml() {
@@ -247,7 +303,7 @@ function buildHtml() {
       <div class="row"><button class="btn ${tool?.type === 'claim' ? 'primary' : ''}" data-act="tool-claim">Claim a plot<i class=dot></i>${money(claimCost(m.extra))}</button>
       <button class="btn ${tool?.type === 'settle' ? 'primary' : ''}" data-act="tool-outpost" ${m.tier < 1 ? 'disabled title="Become a village first"' : ''}>Outpost<i class=dot></i>${money(outpostCost(outposts))}</button></div>
       <p class="note">Each plot costs a little more than the last. An outpost claims nine plots anywhere on the map, so you can reach land your capital lacks.</p></div>
-    <div class="section" style="padding-bottom:4px"><h4>Buildings</h4><p class="note" style="margin:0 0 6px">Pick one, then click a highlighted plot. Darker green is richer land.</p></div>
+    <div class="section" style="padding-bottom:4px"><h4>Buildings</h4><p class="note" style="margin:0 0 6px">Pick one, then ${tap} a highlighted plot. Darker green is richer land.</p></div>
     <ul class="list build">${BUILD_ORDER.map((k) => {
       const def = BUILDINGS[k];
       const locked = (def.tier || 0) > m.tier;
@@ -284,7 +340,7 @@ function tradeHtml() {
       <div class="row"><span><b class="num">${m.idle}</b> of <b class="num">${m.caravans}</b> at home</span>
         <button class="btn tiny" style="margin-left:auto" data-act="buy-caravan">Buy<i class=dot></i>${money(CARAVAN.cost)}</button>
         <button class="btn tiny ghost" data-act="sell-caravan" ${m.idle ? '' : 'disabled'}>Sell</button></div>
-      <p class="note">Each carries ${CARAVAN.capacity} goods to or from a town market and costs ƒ${CARAVAN.upkeep} an hour. Click a town on the map to trade there. Exchange deals with other players are carried by courier and need no caravans.</p></div>
+      <p class="note">Each carries ${CARAVAN.capacity} goods to or from a town market and costs ƒ${CARAVAN.upkeep} an hour. ${Tap} a town on the map to trade there. Exchange deals with other players are carried by courier and need no caravans.</p></div>
     ${offers.length ? `<div class="section"><h4>Offers</h4>${offers.map((o) => {
       const r = S.roads.find((x) => x.id === o.road);
       return `<div class="row small"><span><b>${esc(E(o.from)?.name)}</b> offers you the ${esc(P(r?.a)?.name)}–${esc(P(r?.b)?.name)} road for <span class="num">${money(o.price)}</span></span>
@@ -300,7 +356,11 @@ function tradeHtml() {
 }
 
 function logHtml() {
-  return `<ul class="feed">${S.me.log.map((l) => `<li><time>${ago(l.t)}</time>${esc(l.text)}</li>`).join('') || '<li class="muted">Nothing yet.</li>'}</ul>`;
+  const own = `<ul class="feed">${S.me.log.map((l) => `<li><time>${ago(l.t)}</time>${esc(l.text)}</li>`).join('') || '<li class="muted">Nothing yet.</li>'}</ul>`;
+  if (!small()) return own;
+  // on a phone the Gazette has no panel of its own, so it shares this sheet with your own log
+  const world = `<ul class="feed">${S.news.slice(0, 60).map((n) => `<li class="k-${n.kind}"><time>${ago(n.t)}</time>${esc(n.text)}</li>`).join('')}</ul>`;
+  return `<div class="seg">${[['world', 'The Gazette'], ['mine', 'Your log']].map(([k, n]) => `<button data-act="news-tab" data-id="${k}" aria-pressed="${ui.newsTab === k}">${n}</button>`).join('')}</div>${ui.newsTab === 'mine' ? own : world}`;
 }
 
 function renderLegend() {
@@ -338,7 +398,8 @@ function renderInspector(force = false) {
 }
 
 const richWord = (r) => (r >= 1.15 ? 'rich' : r < 0.85 ? 'poor' : 'fair');
-const closeBtn = '<button class="btn ghost tiny x" data-act="close" aria-label="Close">✕</button>';
+const closeBtn = `<button class="btn ghost tiny x" data-act="close" aria-label="Close">${icon('x', 18)}</button>`;
+const modalClose = `<button class="btn ghost tiny x" data-act="modal-close" aria-label="Close">${icon('x', 18)}</button>`;
 
 // What a building of this kind would make on a plot, counting like neighbours.
 function estimate(kind, tx, ty, level = 1, skipId = null) {
@@ -482,13 +543,13 @@ function townHtml(t) {
     return `<tr class="${short ? 'need' : ''}">
       <td><span class="gd">${swatch(GOODS[g].color)}${GOODS[g].name}</span> ${flow}</td>
       <td class="num">${whole(mk.stock)}</td>
-      <td class="num" title="Average for ${qb.n}: ${qb.n ? price(qb.total / qb.n) : 'none in stock'}">${price(mk.buy)}</td>
-      <td class="num" title="Average for ${qs.n}: ${price(qs.total / qs.n)}">${price(mk.sell)}</td>
+      <td class="num pc" title="Average for ${qb.n}: ${qb.n ? price(qb.total / qb.n) : 'none in stock'}">${price(mk.buy)}</td>
+      <td class="num pc" title="Average for ${qs.n}: ${price(qs.total / qs.n)}">${price(mk.sell)}</td>
       <td class="sp">${spark(detail?.priceHist?.[g]?.slice(-24))}</td>
       <td class="num muted">${mineQty || ''}</td>
       <td><span class="acts">
-        <button class="btn tiny" data-act="mbuy" data-good="${g}" ${mk.stock >= 1 && m.idle ? '' : 'disabled'} title="Buy ${Math.min(qty, qb.n)} for about ${money(qb.total)}">Buy</button>
-        <button class="btn tiny" data-act="msell" data-good="${g}" ${mineQty && m.idle ? '' : 'disabled'} title="Sell ${Math.min(qty, mineQty)} for about ${money(qs.total)}">Sell</button></span></td>
+        <button class="btn tiny" data-act="mbuy" data-good="${g}" ${mk.stock >= 1 && m.idle ? '' : 'disabled'} title="Buy ${Math.min(qty, qb.n)} for about ${money(qb.total)}">Buy<span class="pr num">${price(mk.buy)}</span></button>
+        <button class="btn tiny" data-act="msell" data-good="${g}" ${mineQty && m.idle ? '' : 'disabled'} title="Sell ${Math.min(qty, mineQty)} for about ${money(qs.total)}">Sell<span class="pr num">${price(mk.sell)}</span></button></span></td>
     </tr>`;
   }).join('');
   const orders = m.orders.filter((o) => o.town === t.id);
@@ -510,7 +571,7 @@ function townHtml(t) {
         <span class="small ${m.idle ? 'muted' : 'warn'}">${m.idle ? `${m.idle} caravan${m.idle > 1 ? 's' : ''} free, up to ${maxLoad}` : 'all caravans are out'}</span>
       </div>
       <p class="note" style="margin:0 0 6px">${reach ? `${dur(reach.hours * 2 * 3600e3)} there and back from ${esc(from?.name)}${reach.road ? ', partly by road' : ''}${reach.toll ? `, ${money(reach.toll)} in tolls` : ''}.` : ''} You pay or are paid at once at today's price. Goods you buy arrive when the caravans get home.</p>
-      <table class="market"><thead><tr><th>Good</th><th>Stock</th><th>Buy</th><th>Sell</th><th class="sp">24h</th><th>Yours</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+      <table class="market"><thead><tr><th>Good</th><th>Stock</th><th class="pc">Buy</th><th class="pc">Sell</th><th class="sp">24h</th><th>Yours</th><th class="pch">Price for one</th></tr></thead><tbody>${rows}</tbody></table>
       <p class="note">▲ made here and cheap, ▼ used here. A dot means the town is running short and pays well. Big orders move the price.</p>
     </div>
     <div class="section">
@@ -547,7 +608,7 @@ function roadHtml(r) {
 // ---------- tools: things you do by clicking the map ----------
 function setTool(tool) {
   map.tool = tool; map.toolCache = null;
-  if (tool && window.innerWidth <= 760) ui.sideOpen = false; // leave the map free to tap
+  if (tool && small() && !tool.capital) { ui.sideOpen = false; ui.sel = null; map.sel = null; renderInspector(true); } // leave the map free to tap
   $('#map').classList.toggle('picking', !!tool);
   renderPickbar();
   if (S?.me) renderSide();
@@ -561,12 +622,19 @@ function renderPickbar() {
   if (tool.type === 'build') {
     const def = BUILDINGS[tool.kind];
     const n = map.toolTiles()?.size || 0;
-    text = `<span><b>${def.name}</b><i class=dot></i>${costHtml(def.cost, def.mats)}</span><span class="muted small">${n ? 'Click a highlighted plot' : 'None of your free plots suit it. Claim more land.'}</span>`;
-  } else if (tool.type === 'claim') text = `<span><b>Claim land</b><i class=dot></i>next plot <span class="num">${money(claimCost(S.me.extra))}</span></span><span class="muted small">Click a dashed plot beside your land</span>`;
-  else if (tool.type === 'settle') text = '<span><b>Found an outpost</b></span><span class="muted small">Click free land away from other settlements</span>';
+    text = `<span><b>${def.name}</b><i class=dot></i>${costHtml(def.cost, def.mats)}</span><span class="muted small">${n ? `${Tap} a highlighted plot` : 'None of your free plots suit it. Claim more land.'}</span>`;
+  } else if (tool.type === 'claim') text = `<span><b>Claim land</b><i class=dot></i>next plot <span class="num">${money(claimCost(S.me.extra))}</span></span><span class="muted small">${Tap} a dashed plot beside your land</span>`;
+  else if (tool.type === 'settle') text = `<span><b>Found an outpost</b></span><span class="muted small">${Tap} free land away from other settlements</span>`;
   else if (tool.type === 'place') text = `<span>${tool.label}</span>`;
   bar.innerHTML = `${text}<button class="btn tiny" data-act="tool-cancel">Done</button>`;
   bar.hidden = false;
+}
+
+// From far out a plot is only a few pixels across: the first tap zooms in on the spot instead of choosing it.
+function zoomFirst(hit) {
+  if (map.s * 20 >= 9) return false;
+  map.centerOn(hit.tx * 20 + 10, hit.ty * 20 + 10, small() ? 0.9 : 1.1);
+  return true;
 }
 
 async function useTool(hit) {
@@ -580,11 +648,13 @@ async function useTool(hit) {
     if (c.problem) return toast(c.problem, true);
     await act({ type: 'claim', tx: hit.tx, ty: hit.ty });
   } else if (tool.type === 'settle' && tool.capital) {
+    if (zoomFirst(hit)) return;
     const bad = settleProblem(map.ctxRules, hit.tx, hit.ty, true, null);
     if (bad) return toast(bad, true);
     ui.found.at = [hit.tx, hit.ty]; tool.at = ui.found.at;
     renderFoundSite();
   } else if (tool.type === 'settle') {
+    if (zoomFirst(hit)) return;
     const bad = settleProblem(map.ctxRules, hit.tx, hit.ty, false, S.me.id);
     if (bad) return toast(bad, true);
     const name = prompt('Name the outpost');
@@ -598,7 +668,7 @@ function startRoad(fromId) {
   const A = P(fromId);
   const ok = (p) => p.id !== A.id && dist(A, p) <= ROAD.maxLength && !S.roads.some((r) => r.key === roadKey(A.id, p.id));
   setTool({
-    type: 'place', ok, label: `<b>Road from ${esc(A.name)}</b> <span class="muted small">Click a ringed town or settlement, up to ${ROAD.maxLength} leagues away</span>`,
+    type: 'place', ok, label: `<b>Road from ${esc(A.name)}</b> <span class="muted small">${Tap} a ringed town or settlement, up to ${ROAD.maxLength} leagues away</span>`,
     done: async (p) => {
       const cost = Math.round(ROAD.base + ROAD.costPerUnit * dist(A, p));
       setTool(null);
@@ -606,11 +676,16 @@ function startRoad(fromId) {
       await act({ type: 'buildRoad', a: A.id, b: p.id, toll: ROAD.defaultToll });
     },
   });
+  // pull back far enough to see every place the road could reach
+  layout();
+  const { l, r, t, b } = map.pad;
+  const fit = Math.min(map.w - l - r, map.hgt - t - b - 70) / (2 * ROAD.maxLength + 60);
+  if (map.s > fit) map.centerOn(A.x, A.y, fit);
 }
 
 // ---------- modals ----------
-function openModal(kind) { ui.modal = kind; renderModal(true); }
-function closeModal() { ui.modal = null; $('#modal').hidden = true; }
+function openModal(kind) { ui.modal = kind; renderModal(true); renderNav(); }
+function closeModal() { if (!ui.modal) return; ui.modal = null; $('#modal').hidden = true; renderNav(); }
 
 function renderModal(force = false) {
   const m = $('#modal');
@@ -618,19 +693,20 @@ function renderModal(force = false) {
   const a = document.activeElement;
   if (!force && a && m.contains(a) && (a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.tagName === 'TEXTAREA')) return;
   const html = { exchange: exchangeHtml, ledger: ledgerHtml, help: helpHtml, menu: menuHtml }[ui.modal]();
-  const scroll = $('.card', m)?.scrollTop || 0;
+  const scroll = $('.mbody', m)?.scrollTop || 0;
+  m.className = `modal is-${ui.modal}`;
   m.innerHTML = `<div class="card panel ${ui.modal === 'exchange' ? 'wide' : ''}">${html}</div>`;
   m.hidden = false;
-  $('.card', m).scrollTop = scroll;
+  if ($('.mbody', m)) $('.mbody', m).scrollTop = scroll;
 }
 
 function ledgerHtml() {
   const cos = [...S.empires].sort((a, b) => b.worth - a.worth);
-  return `<div class="phead"><h2>Standings</h2><span class="muted small">No winner, just bragging rights</span><button class="btn ghost tiny x" data-act="modal-close">✕</button></div>
-    <ul class="list">${cos.map((c, i) => `<li class="click" data-act="goto-empire" data-id="${c.id}"><b class="num muted">${i + 1}</b>${swatch(c.color)}<div class="grow"><div class="title">${esc(c.name)} <span class="muted small" style="font-weight:500">${TIERS[c.tier].name}</span></div>
+  return `<div class="phead"><h2>Standings</h2><span class="muted small">No winner, just bragging rights</span>${modalClose}</div>
+    <div class="mbody"><ul class="list">${cos.map((c, i) => `<li class="click" data-act="goto-empire" data-id="${c.id}"><b class="num muted">${i + 1}</b>${swatch(c.color)}<div class="grow"><div class="title">${esc(c.name)} <span class="muted small" style="font-weight:500">${TIERS[c.tier].name}</span></div>
         <div class="sub">${c.pop.toLocaleString('en-US')} people<i class=dot></i>${c.land} plots<i class=dot></i>${c.buildings} buildings${c.leads.length ? `<i class=dot></i>leading maker of ${c.leads.map(lc).join(', ')}` : ''}</div></div>
         ${spark(c.worthHist.slice(-48), 70, 18, true)}<b class="num">${money(c.worth)}</b></li>`).join('')}</ul>
-    <div class="pbody"><p class="note">Worth counts cash, land, buildings, caravans, roads and goods at their usual price.</p></div>`;
+    <div class="pbody"><p class="note">Worth counts cash, land, buildings, caravans, roads and goods at their usual price.</p></div></div>`;
 }
 
 // --- the Exchange ---
@@ -682,7 +758,7 @@ function payText(pay) {
 function exchangeHtml() {
   const x = ui.ex, m = S.me;
   const others = S.empires.filter((c) => c.id !== m.id);
-  const tabs = [['listings', `Listings${S.listings.length ? ` (${S.listings.length})` : ''}`], ['new', 'Sell something'], ['notices', 'Notices and payments']];
+  const tabs = [['listings', `Listings${S.listings.length ? ` (${S.listings.length})` : ''}`], ['new', 'Sell something'], ['notices', small() ? 'Notices' : 'Notices and payments']];
   let body = '';
   if (x.tab === 'listings') {
     const theirs = S.listings.filter((l) => l.seller !== m.id).sort((a, b) => b.t - a.t);
@@ -718,19 +794,19 @@ function exchangeHtml() {
       ${S.board.length ? `<ul class="feed" style="margin:0 -12px">${S.board.map((b) => { const c = E(b.empire); return `<li><time>${ago(b.t)}</time><b style="color:${c?.color}">${esc(c?.name)}</b>: ${esc(b.text)}</li>`; }).join('')}</ul>` : '<p class="note">Nothing posted yet.</p>'}
     </div>`;
   }
-  return `<div class="phead"><h2>The Exchange</h2><span class="muted small">Trade with the other empires</span><button class="btn ghost tiny x" data-act="modal-close">✕</button></div>
-    <div class="tabs">${tabs.map(([k, n]) => `<button class="tab ${x.tab === k ? 'on' : ''}" data-act="ex-tab" data-id="${k}">${n}</button>`).join('')}</div>${body}`;
+  return `<div class="phead"><h2>The Exchange</h2><span class="muted small sub">Trade with the other empires</span>${modalClose}</div>
+    <div class="tabs">${tabs.map(([k, n]) => `<button class="tab ${x.tab === k ? 'on' : ''}" data-act="ex-tab" data-id="${k}">${n}</button>`).join('')}</div><div class="mbody">${body}</div>`;
 }
 
 function helpHtml() {
-  return `<div class="phead"><h2>How to play</h2><button class="btn ghost tiny x" data-act="modal-close">✕</button></div>
-  <div class="pbody" style="line-height:1.5">
+  return `<div class="phead"><h2>How to play</h2>${modalClose}</div>
+  <div class="mbody pbody" style="line-height:1.5">
     <p><b>There is no end and no winner.</b> The world runs in real time, all the time. Your empire keeps working while you are away, so check in a few times a day.</p>
-    <p><b>Build on your land.</b> Open the Build tab, pick a building and click a highlighted plot. Farms want plains, lumber camps forest, quarries hills, mines mountains, and fisheries and saltworks a plot beside water. Some plots are richer than others, and like buildings side by side help each other.</p>
+    <p><b>Build on your land.</b> Open Build, pick a building and ${tap} a highlighted plot. Farms want plains, lumber camps forest, quarries hills, mines mountains, and fisheries and saltworks a plot beside water. Some plots are richer than others, and like buildings side by side help each other.</p>
     <p><b>House people.</b> Residents work your buildings and pay taxes, which is your steady income. They move in while their needs are met: grain, fish, salt and timber at first. Leave them short and they drift away.</p>
     <p><b>Rise in rank.</b> With enough people you can pay for a charter and become a village, a market town, a city. Each step raises taxes and lets buildings grow a level, and your people start wanting more: cloth, ale and stone, then tools and iron, then spices.</p>
     <p><b>Nobody's land has everything.</b> Claim more plots beside your own, found outposts on far-off land once you are a village, or trade for what you lack.</p>
-    <p><b>Trade with towns.</b> Click a neutral town to buy and sell at its market. Your caravans carry the goods, so more caravans and nearer towns mean more trade. Standing orders keep them working while you are offline.</p>
+    <p><b>Trade with towns.</b> ${Tap} a neutral town to buy and sell at its market. Your caravans carry the goods, so more caravans and nearer towns mean more trade. Standing orders keep them working while you are offline.</p>
     <p><b>Trade with each other.</b> On the Exchange, list goods from your stores for a price in cash, in other goods, or both. Others can accept your price or send a counter bid. Listings and bids are held in escrow, so nobody can back out, and couriers deliver the goods.</p>
     <p><b>Roads</b> make caravans and couriers ${Math.round((ROAD.speedMult - 1) * 100)}% faster, keep bandits off, and earn their owner a toll from everyone else who uses them.</p>
     <p class="note">Tip: when a store is full, the buildings that fill it stand idle. Sell the surplus, list it on the Exchange, or build a warehouse.</p>
@@ -738,18 +814,25 @@ function helpHtml() {
 }
 
 function menuHtml() {
-  return `<div class="phead"><h2>${esc(me.username)}</h2><button class="btn ghost tiny x" data-act="modal-close">✕</button></div>
-  <div class="section show-sm"><div class="row"><button class="btn" data-act="home">My capital</button><button class="btn" data-act="world">Whole map</button><button class="btn" data-act="ledger">Standings</button><button class="btn" data-act="help">How to play</button></div></div>
-  <div class="section"><h4>Theme</h4><div class="row">
+  const m = S?.me;
+  return `<div class="phead"><h2>${m ? esc(m.name) : esc(me.username)}</h2><span class="muted small">${m ? `${TIERS[m.tier].name}<i class=dot></i>` : ''}signed in as ${esc(me.username)}</span>${modalClose}</div>
+  <div class="mbody">
+  <div class="section"><div class="menu-list">
+    <button class="btn" data-act="home">${icon('flag')}My capital</button>
+    <button class="btn" data-act="world">${icon('globe')}Whole map</button>
+    <button class="btn" data-act="ledger">${icon('chart')}Standings</button>
+    <button class="btn" data-act="help">${icon('help')}How to play</button></div></div>
+  <div class="section"><h4>Theme</h4><div class="row grow3">
     <button class="btn" data-act="theme" data-id="">Match system</button><button class="btn" data-act="theme" data-id="light">Light</button><button class="btn" data-act="theme" data-id="dark">Dark</button></div></div>
   <div class="section"><h4>Change password</h4>
-    <div class="row"><input class="in" type="password" placeholder="Current" data-input="pw-cur"><input class="in" type="password" placeholder="New" data-input="pw-new"><button class="btn" data-act="pw">Change</button></div></div>
+    <div class="row stack"><input class="in" type="password" placeholder="Current" autocomplete="current-password" data-input="pw-cur"><input class="in" type="password" placeholder="New" autocomplete="new-password" data-input="pw-new"><button class="btn" data-act="pw">Change</button></div></div>
   ${me.admin ? `<div class="section"><h4>Admin: start a new world</h4>
     <p class="note" style="margin-top:0">Wipes the map and every empire, and starts over on fresh land. Accounts and passwords stay; everyone founds a new empire. The old world is kept as a backup.</p>
-    <div class="row"><input class="in" placeholder="Type RESET" data-input="reset-confirm"><button class="btn danger" data-act="admin-reset">Start a new world</button></div></div>` : ''}
+    <div class="row stack"><input class="in" placeholder="Type RESET" autocapitalize="characters" data-input="reset-confirm"><button class="btn danger" data-act="admin-reset">Start a new world</button></div></div>` : ''}
   ${me.admin ? `<div class="section"><h4>Admin: reset a password</h4>
-    <div class="row"><input class="in" placeholder="Username" data-input="ad-user"><input class="in" placeholder="New password" data-input="ad-pw"><button class="btn" data-act="admin-pw">Reset</button></div></div>` : ''}
-  <div class="section"><button class="btn danger" data-act="logout">Sign out</button></div>`;
+    <div class="row stack"><input class="in" placeholder="Username" autocapitalize="none" data-input="ad-user"><input class="in" placeholder="New password" data-input="ad-pw"><button class="btn" data-act="admin-pw">Reset</button></div></div>` : ''}
+  <div class="section"><div class="menu-list"><button class="btn danger" data-act="logout">${icon('out')}Sign out</button></div></div>
+  </div>`;
 }
 
 // ---------- events ----------
@@ -792,12 +875,28 @@ document.addEventListener('click', async (e) => {
   const x = ui.ex;
   switch (a) {
     case 'close': select(null); break;
-    case 'tab': ui.sideOpen = ui.tab === id ? !ui.sideOpen : true; ui.tab = id; if (map.tool && id !== 'build') setTool(null); renderSide(); break;
-    case 'home': { closeModal(); const c = mySettlements().find((s) => s.capital); if (c) map.centerOn(c.x, c.y, Math.max(map.s, 1.7)); break; }
-    case 'world': closeModal(); map.pad.r = ui.sel && !small() ? 440 : 0; map.fit(); break;
-    case 'sel-town': { select({ kind: 'town', id }); const t = T(id); if (t) map.centerOn(t.x, t.y); break; }
+    case 'tab': ui.sideOpen = true; ui.tab = id; if (map.tool && id !== 'build') setTool(null); renderSide(); break;
+    case 'nav': {
+      if (id === 'exchange') {
+        if (ui.modal === 'exchange') { closeModal(); break; }
+        ui.sideOpen = false; if (map.tool) setTool(null); select(null); renderSide(); openModal('exchange');
+        break;
+      }
+      const wasOpen = ui.sideOpen && ui.tab === id && !ui.modal;
+      closeModal();
+      if (map.tool && (id !== 'build' || wasOpen || !ui.sideOpen)) setTool(null);
+      ui.tab = id; ui.sideOpen = !wasOpen;
+      if (ui.sideOpen) { ui.sel = null; map.sel = null; renderInspector(true); }
+      renderSide();
+      break;
+    }
+    case 'side-close': ui.sideOpen = false; renderSide(); break;
+    case 'news-tab': ui.newsTab = id; renderSide(); break;
+    case 'home': { closeModal(); layout(); const c = mySettlements().find((s) => s.capital); if (c) map.centerOn(c.x, c.y, Math.max(map.s, small() ? 1.5 : 1.7)); break; }
+    case 'world': closeModal(); if (small()) { ui.sideOpen = false; renderSide(); } layout(); map.fit(); break;
+    case 'sel-town': { const t = T(id); layout(); if (t && !map.inView(t.x, t.y)) map.centerOn(t.x, t.y, Math.max(map.s, 0.5)); select({ kind: 'town', id }); break; }
     case 'sel-road': select({ kind: 'road', id }); break;
-    case 'goto-empire': { const c = S.settlements.find((s) => s.owner === id && s.capital); if (c) { closeModal(); map.centerOn(c.x, c.y, Math.max(map.s, 1.4)); } break; }
+    case 'goto-empire': { const c = S.settlements.find((s) => s.owner === id && s.capital); if (c) { closeModal(); if (small()) { ui.sideOpen = false; renderSide(); } layout(); map.centerOn(c.x, c.y, Math.max(map.s, 1.4)); } break; }
     case 'news-toggle': ui.newsOpen = !ui.newsOpen; renderNews(); break;
     // land and buildings
     case 'tool-build': if (!el.classList.contains('locked')) setTool(map.tool?.type === 'build' && map.tool.kind === id ? null : { type: 'build', kind: id }); else toast(`Only ${article(tierName(BUILDINGS[id].tier))} or larger can build that.`, true); break;
@@ -826,10 +925,10 @@ document.addEventListener('click', async (e) => {
     case 'offer-accept': await act({ type: 'acceptOffer', offer: id }); break;
     case 'offer-decline': await act({ type: 'declineOffer', offer: id }); break;
     // modals
-    case 'exchange': openModal('exchange'); break;
+    case 'exchange': if (ui.modal === 'exchange') closeModal(); else openModal('exchange'); break;
     case 'ledger': openModal('ledger'); break;
     case 'help': openModal('help'); break;
-    case 'menu': openModal('menu'); break;
+    case 'menu': if (ui.modal === 'menu') closeModal(); else openModal('menu'); break;
     case 'modal-close': closeModal(); break;
     // the Exchange
     case 'ex-tab': x.tab = id; renderModal(true); break;
@@ -858,6 +957,7 @@ document.addEventListener('click', async (e) => {
     // account
     case 'theme': {
       if (id) document.documentElement.dataset.theme = id; else delete document.documentElement.dataset.theme;
+      renderLegend();
       try { localStorage.setItem('ht-theme', id || ''); } catch { /* private mode */ }
       break;
     }
@@ -874,7 +974,7 @@ document.addEventListener('click', async (e) => {
     case 'found-color': ui.found.color = id; map.tool.color = id; document.querySelectorAll('.colors button').forEach((b) => b.classList.toggle('on', b.dataset.id === id)); break;
     case 'found-go': {
       const f = ui.found;
-      if (!f.at) { toast('Click the map to choose where to settle.', true); break; }
+      if (!f.at) { toast(`${Tap} the map to choose where to settle.`, true); break; }
       try { await api('/api/empire', { name: f.name, seat: f.seat, color: f.color, tx: f.at[0], ty: f.at[1] }); setTool(null); await boot(); }
       catch (err) { toast(err.message, true); try { apply(await api('/api/state')); } catch { /* keep the old picture */ } }
       break;
@@ -919,7 +1019,7 @@ function showAuth(inviteRequired, mode = 'login') {
 
 function siteHtml() {
   const at = ui.found.at;
-  if (!at) return '<p class="note sitehint">Now click the map to choose where to settle. Scroll to zoom in. Look for a mix of land: plains to farm, forest for timber, water for fish and salt, hills for stone.</p>';
+  if (!at) return `<p class="note sitehint">${Tap} the map to zoom in, then ${tap} the spot where you want to settle. ${TOUCH ? 'Drag to look around and pinch to zoom' : 'Drag to look around and scroll to zoom'}. Look for a mix of land: plains to farm, forest for timber, water for fish and salt, hills for stone.</p>`;
   const [tx, ty] = at;
   const tiles = settleTiles(map.ctxRules, tx, ty, true);
   const kinds = {}; let coast = 0;
@@ -937,7 +1037,7 @@ function renderFoundSite() { const el = $('#found-site'); if (el) el.innerHTML =
 
 function showFound(st) {
   $('#gate').hidden = true;
-  for (const id of ['topbar', 'news', 'inspector']) $('#' + id).hidden = true;
+  for (const id of ['topbar', 'news', 'inspector', 'nav']) $('#' + id).hidden = true;
   apply(st);
   const taken = new Set(st.empires.map((x) => x.color));
   ui.found.color ||= EMPIRE_COLORS.find((c) => !taken.has(c)) || EMPIRE_COLORS[0];
@@ -946,13 +1046,14 @@ function showFound(st) {
   el.innerHTML = `<div class="pbody">
     <h1 class="foundh">${BIGLOGO} Found your empire</h1>
     <p class="lede">You start with ${money(START.cash)}, ${START.caravans} caravans and stores of timber, stone and food. ${st.empires.length ? `${st.empires.length} ${st.empires.length === 1 ? 'empire has' : 'empires have'} already settled.` : 'You are the first to arrive.'}</p>
+    ${small() ? '<div id="found-site">' + siteHtml() + '</div>' : ''}
     <label>Empire name</label><input class="in" data-found="name" maxlength="28" placeholder="House Harker" value="${esc(ui.found.name)}">
     <label>Capital name <span class="muted" style="font-weight:500">(optional)</span></label><input class="in" data-found="seat" maxlength="24" placeholder="Same as the empire" value="${esc(ui.found.seat)}">
     <label>Colour</label><div class="colors">${EMPIRE_COLORS.filter((c) => !taken.has(c)).map((c) => `<button type="button" data-act="found-color" data-id="${c}" class="${c === ui.found.color ? 'on' : ''}" style="background:${c}" aria-label="${c}"></button>`).join('')}</div>
-    <div id="found-site">${siteHtml()}</div>
+    ${small() ? '' : '<div id="found-site">' + siteHtml() + '</div>'}
     <div class="actions"><button class="btn primary" id="found-go" data-act="found-go" ${ui.found.at ? '' : 'disabled'}>Settle here</button><button class="btn ghost" data-act="logout">Sign out</button></div>
   </div>`;
-  map.pad = { l: 340, r: 0 };
+  layout();
   map.fit();
   setTool({ type: 'settle', capital: true, color: ui.found.color, at: ui.found.at });
 }
@@ -967,11 +1068,12 @@ async function boot() {
   if (!st.me) return showFound(st);
   $('#gate').hidden = true;
   $('#side').classList.remove('founding');
-  for (const id of ['topbar', 'side', 'news']) $('#' + id).hidden = false;
-  map.pad = { l: 330, r: 0 };
+  for (const id of ['topbar', 'side', 'news', 'nav']) $('#' + id).hidden = false;
+  if (!started) ui.sideOpen = !small(); // a phone opens on the map, with the sections a tap away
   apply(st);
+  layout();
   const cap = st.settlements.find((s) => s.owner === st.me.id && s.capital);
-  if (cap) map.centerOn(cap.x, cap.y, 1.9);
+  if (cap) map.centerOn(cap.x, cap.y, small() ? 1.6 : 1.9);
   if (started) return;
   started = true;
   clearInterval(poller);
@@ -981,5 +1083,12 @@ async function boot() {
   try { seen = localStorage.getItem('sr-seen-help'); localStorage.setItem('sr-seen-help', '1'); } catch { /* ignore */ }
   if (!seen) openModal('help');
 }
+
+// turning a phone, or resizing a window across the line between the two layouts
+PHONE.addEventListener('change', () => {
+  if (!S?.me) { if (!$('#side').hidden) { layout(); map.fit(); } return; }
+  ui.sideOpen = !small();
+  renderSide(); renderInspector(true); renderModal(true); layout();
+});
 
 boot().catch((e) => gate(`<h1>Saltroad</h1><p class="lede">Could not reach the server: ${esc(e.message)}</p>`));

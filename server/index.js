@@ -21,7 +21,16 @@ const PORT = Number(process.env.PORT || 3000);
 const INVITE_CODE = process.env.INVITE_CODE || '';
 const TICK_MS = 20_000;
 
+// Raise this to clear every account once, the next time the server starts: everyone signs up again and the
+// first to do so is the admin. The old accounts are kept as a backup. Raise WORLD_VERSION too for a new world.
+const ACCOUNTS_EPOCH = 2;
+
 const store = await openStore();
+if ((Number(await store.getMeta('accounts_epoch')) || 1) < ACCOUNTS_EPOCH) {
+  const n = await store.clearAccounts();
+  await store.setMeta('accounts_epoch', ACCOUNTS_EPOCH);
+  console.log(`Accounts cleared for a fresh start (${n} backed up and removed)`);
+}
 const SECRET = process.env.SESSION_SECRET || (await store.secret());
 
 function freshWorld(seed) {
