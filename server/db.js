@@ -72,6 +72,21 @@ async function pgStore(url) {
       const r = await pool.query('SELECT id, username, is_admin, created_at FROM users ORDER BY id');
       return r.rows;
     },
+    async getMeta(key) {
+      const r = await pool.query('SELECT value FROM meta WHERE key = $1', [key]);
+      return r.rows[0]?.value;
+    },
+    async setMeta(key, value) {
+      await pool.query('INSERT INTO meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2', [key, String(value)]);
+    },
+    // Remove every account, keeping a copy beside the kept world backups, and sign everyone out.
+    async clearAccounts() {
+      const r = await pool.query('SELECT id, username, pass_hash, is_admin, created_at FROM users ORDER BY id');
+      if (r.rows.length) await pool.query('INSERT INTO world_backups (state, kept) VALUES ($1, TRUE)', [JSON.stringify({ kind: 'accounts', users: r.rows })]);
+      await pool.query('DELETE FROM users');
+      await pool.query('DELETE FROM meta WHERE key = $1', ['session_secret']);
+      return r.rows.length;
+    },
     async secret() {
       const r = await pool.query('SELECT value FROM meta WHERE key = $1', ['session_secret']);
       if (r.rows[0]) return r.rows[0].value;
@@ -102,6 +117,15 @@ function fileStore() {
     },
     async setPassword(id, pass_hash) { const users = read('users.json', []); const u = users.find((x) => x.id === id); if (u) u.pass_hash = pass_hash; write('users.json', users); },
     async listUsers() { return read('users.json', []).map(({ pass_hash, ...u }) => u); },
+    async getMeta(key) { return read('meta.json', {})[key]; },
+    async setMeta(key, value) { const m = read('meta.json', {}); m[key] = String(value); write('meta.json', m); },
+    async clearAccounts() {
+      const users = read('users.json', []);
+      if (users.length) write(`users.kept-${Date.now()}.json`, users);
+      write('users.json', []);
+      const m = read('meta.json', {}); delete m.secret; write('meta.json', m);
+      return users.length;
+    },
     async secret() { let m = read('meta.json', {}); if (!m.secret) { m.secret = crypto.randomBytes(32).toString('hex'); write('meta.json', m); } return m.secret; },
   };
 }

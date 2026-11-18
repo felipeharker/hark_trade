@@ -8,7 +8,7 @@ It is a sibling of [Hark Urbanism](https://urbanism.felipeharker.org) and shares
 
 **On your own**
 
-- **Land**: the map is a grid of plots over seeded terrain. You found a capital, which comes with the plots around it, then claim neighbouring plots one at a time or found outposts on far-off land. Terrain decides what a plot can do: plains grow grain and wool, forest gives timber, hills stone and wool, mountains iron and stone, and plots beside water take fisheries and saltworks. Some plots are richer than others.
+- **Land**: the map is a grid of 160 by 110 plots over seeded terrain, with 54 neutral towns spread across it. You found a capital, which comes with the plots around it, then claim neighbouring plots one at a time or found outposts on far-off land. Terrain decides what a plot can do: plains grow grain and wool, forest gives timber, hills stone and wool, mountains iron and stone, and plots beside water take fisheries and saltworks. Some plots are richer than others.
 - **Buildings** go on your plots: farms, pastures, fisheries, saltworks, lumber camps, quarries and mines make raw goods; weavers, breweries and smithies turn wool, grain, and iron with timber into cloth, ale and tools; houses hold people; warehouses hold more goods. Like buildings side by side help each other, and buildings can be upgraded.
 - **People** move into your houses while their needs are met, work your buildings and pay taxes, which is your steady income. A hamlet wants grain, fish, salt and timber.
 - **Ranks**: with enough people you pay for a charter and become a village, market town, city and metropolis. Each rank raises taxes, lets buildings go a level higher and holds more people, and your people start wanting more (cloth, ale, stone and wool, then tools and iron, then spices).
@@ -37,7 +37,9 @@ Without `DATABASE_URL` the world and accounts are saved as JSON in `./data`. Wit
 | `WORLD_SEED` | Seed for the first world. Random if unset. |
 | `PORT` | Defaults to 3000. |
 
-The first account created is the admin. From the ☰ menu the admin can reset other players' passwords and **start a new world** (type RESET to confirm): the map and every empire are replaced, accounts stay, and the old world is saved to `world_backups` first. A world saved by an older version of the game is backed up and replaced the same way when the server starts.
+The first account created is the admin. From the ☰ menu the admin can reset other players' passwords and **start a new world** (type RESET to confirm): the map and every empire are replaced, accounts stay, and the old world is saved to `world_backups` first. A world saved by an older version of the game is backed up and replaced the same way when the server starts (`WORLD_VERSION` in `server/world.js`).
+
+To clear every account as well, raise `ACCOUNTS_EPOCH` in `server/index.js`. On the next start the accounts are copied into a kept row of `world_backups` (or a `users.kept-*.json` file), removed, and everyone is signed out; the first person to sign up again becomes the admin. It happens once per epoch.
 
 `npm run smoke` runs the rules end to end without a server (found two empires, build, trade, strike a deal). `npm run simtest` lets a few simple bots run empires for some days and prints how they fare: `node tools/simtest.mjs [days] [players] [seed] [hours between check-ins]`.
 
@@ -46,6 +48,8 @@ The first account created is the admin. From the ☰ menu the admin can reset ot
 - `shared/` game data (goods, ranks, buildings, costs, pricing), land rules and seeded terrain, used by both server and browser.
 - `server/world.js` world generation, `server/sim.js` the simulation, `server/actions.js` player commands, `server/exchange.js` listings and bids, `server/index.js` auth and the HTTP API, `server/db.js` storage.
 - `public/` the client: `map.js` draws the canvas map, `app.js` everything else. No build step.
+
+On an upright phone the layout follows Hark Urbanism: a two-row top bar (name and actions, then the day and the numbers), a five-button bar along the bottom (Empire, Build, Trade, Exchange, News), and panels that open as sheets above it, one at a time. A phone on its side and tablets keep the desktop arrangement, tightened. The breakpoints are at the end of `public/style.css`.
 
 ## Deployment
 

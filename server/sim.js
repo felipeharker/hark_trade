@@ -427,7 +427,7 @@ export function netWorth(world, e) {
 // ---------- the world's own rhythm ----------
 function maybeEvent(world, dtH, now) {
   if (!world.towns.length) return;
-  if (Math.random() > dtH / 4) return;
+  if (Math.random() > (dtH * world.towns.length) / 110) return; // about one every two hours on a full map
   const t = world.towns[Math.floor(Math.random() * world.towns.length)];
   const roll = Math.random();
   const has = (g) => t.resources.some((r) => r.good === g);

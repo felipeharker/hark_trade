@@ -51,7 +51,7 @@ export class MapView {
     this.hover = null; // [tx, ty]
     this.base = null; this.baseKey = '';
     this.timeOffset = 0;
-    this.pad = { l: 0, r: 0 };
+    this.pad = { l: 0, r: 0, t: 52, b: 0 }; // screen edges covered by the interface
     this.bindInput();
     new ResizeObserver(() => this.resize()).observe(canvas);
     this.resize();
@@ -88,18 +88,24 @@ export class MapView {
   }
 
   fit() {
-    const padL = this.w > 760 ? this.pad.l : 0, padR = this.w > 760 ? this.pad.r : 0;
-    const availW = Math.max(200, this.w - padL - padR - 20), availH = Math.max(200, this.hgt - 52 - 20);
+    const { l, r, t, b } = this.pad;
+    const availW = Math.max(160, this.w - l - r - 16), availH = Math.max(160, this.hgt - t - b - 16);
     this.s = Math.min(availW / MAP_W, availH / MAP_H);
-    this.ox = padL + 10 + (availW - MAP_W * this.s) / 2;
-    this.oy = 52 + 10 + (availH - MAP_H * this.s) / 2;
+    this.ox = l + 8 + (availW - MAP_W * this.s) / 2;
+    this.oy = t + 8 + (availH - MAP_H * this.s) / 2;
   }
 
   centerOn(x, y, s) {
     if (s) this.s = s;
-    const padL = this.w > 760 ? this.pad.l : 0, padR = this.w > 760 ? this.pad.r : 0;
-    this.ox = padL + (this.w - padL - padR) / 2 - x * this.s;
-    this.oy = 52 + (this.hgt - 52) / 2 - y * this.s;
+    const { l, r, t, b } = this.pad;
+    this.ox = l + (this.w - l - r) / 2 - x * this.s;
+    this.oy = t + (this.hgt - t - b) / 2 - y * this.s;
+  }
+
+  // Is this world point on screen and clear of the interface?
+  inView(x, y) {
+    const [sx, sy] = this.toScreen(x, y);
+    return sx > this.pad.l + 20 && sx < this.w - this.pad.r - 20 && sy > this.pad.t + 20 && sy < this.hgt - this.pad.b - 20;
   }
 
   toScreen(x, y) { return [x * this.s + this.ox, y * this.s + this.oy]; }
@@ -148,7 +154,7 @@ export class MapView {
     return pts[0];
   }
 
-  townR(t) { return Math.max(5, Math.min(15, 4 + Math.sqrt(t.pop) / 7)) * Math.min(1.5, Math.max(0.8, this.s)); }
+  townR(t) { return Math.max(5, Math.min(15, 4 + Math.sqrt(t.pop) / 7)) * Math.min(1.5, Math.max(0.6, this.s * 1.6)); }
 
   // Which plots the current tool can act on. Recomputed when the state or the tool changes.
   toolTiles() {
@@ -340,6 +346,7 @@ export class MapView {
 
     // towns
     ctx.textAlign = 'center';
+    const labels = [];
     const pickable = tool?.type === 'place' ? tool.ok : null;
     for (const t of st.towns) {
       const [x, y] = this.toScreen(t.x, t.y);
@@ -357,8 +364,7 @@ export class MapView {
       ctx.fillStyle = surface; ctx.fill();
       ctx.strokeStyle = sel ? accent : ink; ctx.lineWidth = sel ? 3 : 1.5; ctx.stroke();
       if (t.tier >= 2) { ctx.beginPath(); ctx.arc(x, y, r * 0.45, 0, Math.PI * 2); ctx.fillStyle = ink; ctx.fill(); }
-      ctx.font = `600 ${t.tier >= 2 ? 13 : 12}px Overpass, system-ui, sans-serif`;
-      label(ctx, t.name, x, y + r + 15, ink, surface);
+      labels.push({ text: t.name, x, y: y + r + 15, font: `600 ${t.tier >= 2 ? 13 : 12}px Overpass, system-ui, sans-serif`, fill: ink, rank: sel ? 1e9 : t.pop });
     }
 
     // settlements: named under the hall, in the owner's colour
@@ -374,10 +380,19 @@ export class MapView {
         ctx.beginPath(); ctx.arc(x, y, p.capital ? 5 : 3.5, 0, 7); ctx.fillStyle = co?.color || ink; ctx.fill();
         ctx.strokeStyle = surface; ctx.lineWidth = 1.5; ctx.stroke();
       }
-      ctx.font = `800 ${p.capital ? 13 : 12}px Overpass, system-ui, sans-serif`;
       const text = tp < 12 && p.capital ? co?.name || p.name : p.name;
       // close up the buildings matter more than the name, which the hall shows when clicked
-      if (tp < 30 && (tp >= 12 || p.capital)) label(ctx, text, x, y + Math.max(tp * 0.5, 6) + 14, co?.color || ink, surface);
+      if (tp < 30 && (tp >= 12 || p.capital)) labels.push({ text, x, y: y + Math.max(tp * 0.5, 6) + 14, font: `800 ${p.capital ? 13 : 12}px Overpass, system-ui, sans-serif`, fill: co?.color || ink, rank: p.capital ? 1e8 : 1e7 });
+    }
+    // names, most important first; one that would sit on another is left out until you zoom in
+    const taken = [];
+    for (const L of labels.sort((a, b) => b.rank - a.rank)) {
+      ctx.font = L.font;
+      const w = ctx.measureText(L.text).width / 2 + 3;
+      const box = [L.x - w, L.y - 12, L.x + w, L.y + 4];
+      if (taken.some((q) => box[0] < q[2] && box[2] > q[0] && box[1] < q[3] && box[3] > q[1])) continue;
+      taken.push(box);
+      label(ctx, L.text, L.x, L.y, L.fill, surface);
     }
 
     // moving caravans and couriers
@@ -407,14 +422,14 @@ export class MapView {
     }
   }
 
-  hit(sx, sy) {
+  hit(sx, sy, slop = 0) {
     const st = this.state;
     if (!st) return null;
     let bt = null, bd = Infinity;
     for (const t of st.towns) {
       const [x, y] = this.toScreen(t.x, t.y);
       const d = Math.hypot(x - sx, y - sy);
-      if (d < this.townR(t) + 8 && d < bd) { bd = d; bt = t; }
+      if (d < this.townR(t) + 8 + slop && d < bd) { bd = d; bt = t; }
     }
     if (bt) return { kind: 'town', id: bt.id };
     const [tx, ty] = this.tileAtScreen(sx, sy);
@@ -426,7 +441,7 @@ export class MapView {
         const [x1, y1] = this.toScreen(A.x, A.y), [x2, y2] = this.toScreen(B.x, B.y);
         const dx = x2 - x1, dy = y2 - y1;
         const f = Math.max(0, Math.min(1, ((sx - x1) * dx + (sy - y1) * dy) / (dx * dx + dy * dy)));
-        if (Math.hypot(x1 + dx * f - sx, y1 + dy * f - sy) < 5) return { kind: 'road', id: r.id };
+        if (Math.hypot(x1 + dx * f - sx, y1 + dy * f - sy) < 5 + slop * 0.6) return { kind: 'road', id: r.id };
       }
     }
     if (!inMap(tx, ty)) return null;
@@ -434,12 +449,12 @@ export class MapView {
   }
 
   // The town or settlement under the pointer, for tools that pick a place.
-  placeAt(sx, sy) {
+  placeAt(sx, sy, slop = 0) {
     let best = null, bd = Infinity;
     for (const p of this.placeMap.values()) {
       const [x, y] = this.toScreen(p.x, p.y);
       const d = Math.hypot(x - sx, y - sy);
-      if (d < Math.max(18, TILE * this.s) && d < bd) { bd = d; best = p; }
+      if (d < Math.max(18, TILE * this.s) + slop && d < bd) { bd = d; best = p; }
     }
     return best;
   }
@@ -457,10 +472,10 @@ export class MapView {
         pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), s: this.s };
       }
       down = { x: e.offsetX, y: e.offsetY, ox: this.ox, oy: this.oy };
-      moved = false;
+      moved = pts.size > 1; // a second finger is never a tap
     });
     c.addEventListener('pointermove', (e) => {
-      this.hover = this.tileAtScreen(e.offsetX, e.offsetY);
+      this.hover = e.pointerType === 'touch' ? null : this.tileAtScreen(e.offsetX, e.offsetY);
       if (!pts.has(e.pointerId)) {
         c.style.cursor = this.tool ? 'crosshair' : this.hit(e.offsetX, e.offsetY) ? 'pointer' : '';
         return;
@@ -475,23 +490,28 @@ export class MapView {
       }
       if (!down) return;
       const dx = e.offsetX - down.x, dy = e.offsetY - down.y;
-      if (Math.abs(dx) + Math.abs(dy) > 5) moved = true;
+      if (Math.abs(dx) + Math.abs(dy) > (e.pointerType === 'touch' ? 10 : 5)) moved = true;
       if (moved) { this.ox = down.ox + dx; this.oy = down.oy + dy; c.classList.add('panning'); }
     });
     c.addEventListener('pointerleave', () => { this.hover = null; });
     const up = (e) => {
       pts.delete(e.pointerId);
+      if (pinch && pts.size === 1) { // one finger left after a pinch: carry on panning from where it is
+        const [q] = [...pts.values()];
+        down = { x: q[0], y: q[1], ox: this.ox, oy: this.oy };
+      }
       if (pts.size < 2) pinch = null;
       c.classList.remove('panning');
+      const slop = e.pointerType === 'touch' ? 10 : 0;
       if (down && !moved && pts.size === 0) {
         const tool = this.tool;
         if (tool?.type === 'place') {
-          const p = this.placeAt(e.offsetX, e.offsetY);
+          const p = this.placeAt(e.offsetX, e.offsetY, slop);
           if (p && tool.ok(p)) this.h.onTool({ place: p });
         } else if (tool) {
           const [tx, ty] = this.tileAtScreen(e.offsetX, e.offsetY);
           if (inMap(tx, ty)) this.h.onTool({ tx, ty });
-        } else this.h.onSelect(this.hit(e.offsetX, e.offsetY));
+        } else this.h.onSelect(this.hit(e.offsetX, e.offsetY, slop));
       }
       if (pts.size === 0) down = null;
     };
@@ -504,7 +524,7 @@ export class MapView {
   }
 
   zoomAt(sx, sy, f) {
-    const ns = Math.max(0.3, Math.min(5, this.s * f));
+    const ns = Math.max(0.07, Math.min(5, this.s * f));
     const [wx, wy] = this.toWorld(sx, sy);
     this.s = ns;
     this.ox = sx - wx * ns; this.oy = sy - wy * ns;
